@@ -3,6 +3,7 @@ import base64
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 import hashlib
 import hmac
 import html
@@ -39,6 +40,9 @@ class Bling:
         self.p = '%s' if store.database_url else '?'
         self.start_date = date.fromisoformat(settings['BLING_START_DATE']).isoformat()
         self.shop = str(int(settings['BLING_STORE_ID'])) if settings.get('BLING_STORE_ID') else ''
+        rules_path = Path(__file__).with_name('crm_rules.json')
+        rules = json.loads(rules_path.read_text(encoding='utf-8')) if rules_path.exists() else {}
+        self.rules = rules.get(self.shop, {})
         self.valid = self.ids('BLING_VALID_STATUS_IDS')
         self.excluded = self.ids('BLING_EXCLUDED_STATUS_IDS')
         self.pending = self.ids('BLING_PENDING_STATUS_IDS')
@@ -134,6 +138,8 @@ class Bling:
             'bling_id': str(order['id']), 'bling_number': str(order.get('numero', '')),
             'external_number': external, 'customer_key': identity, 'name': contact.get('nome', ''),
             'document': mask, 'date': order['data'], 'total': str(order.get('total', 0)),
+            'products_total': str(order['totalProdutos']) if order.get('totalProdutos') is not None else None,
+            'freight': str(order['transporte']['frete']) if (order.get('transporte') or {}).get('frete') is not None else None,
             'status': status, 'expected_date': order.get('dataPrevista', ''),
             'items': [{'description': i.get('descricao', ''), 'sku': i.get('codigo', ''), 'quantity': i.get('quantidade', 0)} for i in order.get('itens', [])],
         }
@@ -178,39 +184,66 @@ class Bling:
             self.put(db, 'last_error', '')
         return len(rows)
 
+    def purchase_valid(self, row):
+        if row['status'] in self.excluded:
+            return False
+        return row['status'] in self.valid or self.rules.get('orders', {}).get(row['external_number'], {}).get('valid_purchase', False)
+
+    def delivery_action(self, row):
+        if row['status'] in self.excluded:
+            return 'Excluído da recorrência'
+        rule = self.rules.get('orders', {}).get(row['external_number'], {})
+        if rule.get('delivery') == 'delivered':
+            return 'Entregue — confirmado pelo responsável; sem pendência de despacho'
+        if rule.get('delivery') == 'scheduled':
+            return 'Despacho previsto em ' + date.fromisoformat(rule['dispatch_date']).strftime('%d/%m/%Y') + ' — informado pelo responsável; conferir realização'
+        return 'Conferir etiqueta e despacho' if row['status'] in self.pending else 'Compra válida; envio a conferir' if self.purchase_valid(row) else 'Conferir situação'
+
     def snapshot(self):
         with self.store.connect() as db:
             rows = [json.loads(r[0]) for r in db.execute('SELECT payload FROM crm_orders').fetchall()]
             last_sync, error = self.get(db, 'last_sync'), self.get(db, 'last_error')
             connected = bool(self.get(db, 'tokens'))
+        rows = [r for r in rows if r['bling_number'] not in self.rules.get('excluded_bling_numbers', [])]
         customers = defaultdict(list)
         for row in rows:
             customers[row['customer_key']].append(row)
         return rows, customers, last_sync, error, connected
 
+    @staticmethod
+    def money(value):
+        return 'Não informado' if value is None else 'R$ ' + format(Decimal(value), '.2f').replace('.', ',')
+
+    def products_sum(self, rows):
+        if any(x.get('products_total') is None for x in rows):
+            return 'Aguardando atualização'
+        return self.money(sum((Decimal(x['products_total']) for x in rows), Decimal('0')))
+
     def page(self):
         rows, customers, last_sync, error, connected = self.snapshot()
-        esc = lambda value: html.escape(str(value or ''))
+        esc = lambda value: html.escape(str(value if value is not None else ''))
         parts = ['<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fazendo Fita — CRM</title><style>body{font:16px system-ui;max-width:1100px;margin:32px auto;padding:16px;color:#263238}table{border-collapse:collapse;width:100%;margin:20px 0}td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd}small{color:#666}</style><h1>Clientes e pedidos — Fazendo Fita</h1>']
         parts.append('<p>' + ('Bling conectado.' if connected else '<a href="/bling/connect">Conectar ao Bling</a>') + '</p>')
         parts.append('<p>Última importação (UTC): ' + esc(last_sync or 'Ainda não realizada') + '</p>')
         if error:
             parts.append('<p>Importação pendente: ' + esc(error) + '. Os dados anteriores foram preservados.</p>')
-        if not self.valid:
+        if not self.valid and not self.rules.get('orders'):
             parts.append('<p>As situações de compra válida ainda precisam ser configuradas. Os pedidos importados não são automaticamente contados como compras confirmadas.</p>')
         if connected and not self.shop:
             parts.append('<p>Selecione a loja do Mercado Livre na configuração do serviço. <a href="/bling/stores">Consultar IDs das lojas</a>.</p>')
-        parts.append('<h2>Histórico de clientes</h2><table><tr><th>Cliente</th><th>Documento mascarado</th><th>Pedidos importados</th><th>Compras válidas</th><th>Perfil</th><th>Primeira compra válida</th><th>Última compra válida</th><th>Total dos pedidos válidos</th></tr>')
+        if self.rules.get('orders'):
+            parts.append('<p>Compras e informações de envio dos pedidos já conferidos foram confirmadas pelo responsável. Novos pedidos continuam a conferir até validação. O andamento logístico automático ainda não está conectado.</p>')
+        parts.append('<h2>Histórico de clientes</h2><table><tr><th>Cliente</th><th>Documento mascarado</th><th>Pedidos importados</th><th>Compras válidas</th><th>Perfil</th><th>Primeira compra válida</th><th>Última compra válida</th><th>Produtos nas compras válidas</th></tr>')
         for orders in customers.values():
             latest = max(orders, key=lambda x: x['date'])
-            valid = [x for x in orders if x['status'] in self.valid]
+            valid = [x for x in orders if self.purchase_valid(x)]
             profile = 'Recorrente' if len(valid) >= 2 else 'Compra única' if valid else 'A conferir'
-            parts.append('<tr>' + ''.join('<td>' + esc(x) + '</td>' for x in (latest['name'], latest['document'], len(orders), len(valid), profile, min((x['date'] for x in valid), default=''), max((x['date'] for x in valid), default=''), 'R$ ' + str(sum((Decimal(x['total']) for x in valid), Decimal('0')).quantize(Decimal('0.01'))))) + '</tr>')
-        parts.append('</table><h2>Pedidos e pendências</h2><p>A previsão do Bling não confirma o prazo de postagem do Mercado Livre. Confira o prazo no marketplace.</p><table><tr><th>Pedido Mercado Livre</th><th>Pedido Bling</th><th>Cliente</th><th>Produtos</th><th>Valor do pedido</th><th>Data</th><th>Situação (ID)</th><th>Ação</th><th>Previsão Bling</th></tr>')
+            parts.append('<tr>' + ''.join('<td>' + esc(x) + '</td>' for x in (latest['name'], latest['document'], len(orders), len(valid), profile, min((x['date'] for x in valid), default=''), max((x['date'] for x in valid), default=''), self.products_sum(valid))) + '</tr>')
+        parts.append('</table><h2>Pedidos e pendências</h2><p>A previsão do Bling não confirma o prazo de postagem do Mercado Livre. Confira o prazo no marketplace.</p><table><tr><th>Pedido Mercado Livre</th><th>Pedido Bling</th><th>Cliente</th><th>Produtos</th><th>Produtos</th><th>Frete do pedido</th><th>Total com frete</th><th>Data</th><th>Situação (ID)</th><th>Ação</th><th>Previsão Bling</th></tr>')
         for row in sorted(rows, key=lambda x: x['date'], reverse=True):
             status = row['status']
-            action = 'Conferir etiqueta e despacho' if status in self.pending else 'Excluído da recorrência' if status in self.excluded else 'Compra válida' if status in self.valid else 'Conferir situação'
-            parts.append('<tr>' + ''.join('<td>' + esc(x) + '</td>' for x in (row['external_number'], row['bling_number'], row['name'], '; '.join(str(i['quantity']) + ' × ' + i['description'] for i in row['items']), 'R$ ' + row['total'], row['date'], status, action, row['expected_date'])) + '</tr>')
+            action = self.delivery_action(row)
+            parts.append('<tr>' + ''.join('<td>' + esc(x) + '</td>' for x in (row['external_number'], row['bling_number'], row['name'], '; '.join(str(i['quantity']) + ' × ' + i['description'] for i in row['items']), self.money(row.get('products_total')), self.money(row.get('freight')), self.money(row['total']), row['date'], status, action, row['expected_date'] if row['expected_date'] != '0000-00-00' else 'Não informada')) + '</tr>')
         parts.append('</table><p>Consulta interna. Nenhuma mensagem é enviada aos compradores.</p></html>')
         return ''.join(parts)
 

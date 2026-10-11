@@ -74,3 +74,16 @@ Fontes oficiais consultadas em 11/10/2026:
 - https://developer.bling.com.br/migracao-jwt
 - https://developer.bling.com.br/referencia
 - https://developer.bling.com.br/perguntas-frequentes
+
+
+## Atualização após conferência pelo proprietário — 11/10/2026
+
+Regras específicas do canal 206307158 em crm_rules.json:
+- Pedido Bling 1 é teste: excluído do painel, clientes, compras e pendências.
+- Pedidos da loja 2000015410851473 e 2000015447855219 são compras reais, confirmadas individualmente. Não estende situação 6 a outros pedidos.
+- Pedido 2 entregue conforme informação do responsável; sem pendência de despacho.
+- Pedido 3 com despacho previsto para 13/10/2026 conforme responsável. A data não comprova despacho realizado; continuará a conferir até nova informação.
+- Produtos e frete lidos dos campos totalProdutos e transporte.frete; total preservado separadamente. Soma por cliente usa produtos, não frete. Dados ausentes aguardam importação, nunca inferidos por subtração.
+- Líquido do marketplace não é calculado por estimativa. Não confundir total com receita líquida nem lucro.
+- Regras são confirmações manuais iniciais, não rastreamento logístico automático. Novos pedidos continuam a conferir; mudanças de situação para IDs de exclusão configurados prevalecem sobre confirmações anteriores.
+- Avisos por WhatsApp/email e atualização automática da entrega continuam pendentes.
