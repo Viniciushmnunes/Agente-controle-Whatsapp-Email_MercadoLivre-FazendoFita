@@ -47,6 +47,7 @@ class Webhook:
         self.app_secret = app_secret.encode()
         self.store = store
         self.bling = bling
+        self.meli = None
 
     def __call__(self, environ, start_response):
         def respond(status, text):
@@ -55,6 +56,8 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if self.meli and path in ('/meli/connect', '/meli/callback', '/meli/notifications'):
+            return self.meli.handle(environ, start_response)
         if self.bling and (path == '/crm' or path in ('/bling/connect', '/bling/callback', '/bling/stores', '/bling/statuses')):
             return self.bling.handle(environ, start_response)
         if path == '/healthz' and method == 'GET':
@@ -109,4 +112,10 @@ def create_app():
         raise ValueError('Render requires persistent Postgres DATABASE_URL')
     store = Store(os.environ.get('DATABASE_URL'), os.environ.get('SQLITE_PATH'))
     from bling import configure
-    return Webhook(os.environ.get('VERIFY_TOKEN'), os.environ.get('META_APP_SECRET'), store, configure(store))
+    crm = configure(store)
+    from meli import configure as configure_meli
+    app = Webhook(os.environ.get('VERIFY_TOKEN'), os.environ.get('META_APP_SECRET'), store, crm)
+    app.meli = configure_meli(crm)
+    if crm:
+        crm.meli = app.meli
+    return app

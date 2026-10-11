@@ -32,6 +32,7 @@ class BlingError(Exception):
 class Bling:
     def __init__(self, store, settings, transport=None):
         self.store, self.settings = store, settings
+        self.meli = None
         self.cipher = Fernet(settings['BLING_ENCRYPTION_KEY'].encode())
         self.lock = threading.RLock()
         self.sync_lock = threading.Lock()
@@ -185,11 +186,19 @@ class Bling:
         return len(rows)
 
     def purchase_valid(self, row):
+        if self.meli:
+            valid = self.meli.valid(row)
+            if valid is not None:
+                return valid
         if row['status'] in self.excluded:
             return False
         return row['status'] in self.valid or self.rules.get('orders', {}).get(row['external_number'], {}).get('valid_purchase', False)
 
     def delivery_action(self, row):
+        if self.meli:
+            action = self.meli.action(row)
+            if action:
+                return action
         if row['status'] in self.excluded:
             return 'Excluído da recorrência'
         rule = self.rules.get('orders', {}).get(row['external_number'], {})
@@ -231,7 +240,12 @@ class Bling:
             parts.append('<p>As situações de compra válida ainda precisam ser configuradas. Os pedidos importados não são automaticamente contados como compras confirmadas.</p>')
         if connected and not self.shop:
             parts.append('<p>Selecione a loja do Mercado Livre na configuração do serviço. <a href="/bling/stores">Consultar IDs das lojas</a>.</p>')
-        if self.rules.get('orders'):
+        if self.meli:
+            meli_connected, meli_error = self.meli.summary()
+            parts.append('<p>' + ('Mercado Livre conectado; consultas automáticas habilitadas. Cada pedido indica o resultado da consulta; confirmações manuais anteriores podem ser usadas quando faltarem dados atuais.' if meli_connected else '<a href="/meli/connect">Conectar ao Mercado Livre</a>') + '</p>')
+            if meli_error:
+                parts.append('<p>Consulta Mercado Livre pendente: ' + esc(meli_error) + '</p>')
+        if self.rules.get('orders') and not (self.meli and self.meli.summary()[0]):
             parts.append('<p>Compras e informações de envio dos pedidos já conferidos foram confirmadas pelo responsável. Novos pedidos continuam a conferir até validação. O andamento logístico automático ainda não está conectado.</p>')
         parts.append('<h2>Histórico de clientes</h2><table><tr><th>Cliente</th><th>Documento mascarado</th><th>Pedidos importados</th><th>Compras válidas</th><th>Perfil</th><th>Primeira compra válida</th><th>Última compra válida</th><th>Produtos nas compras válidas</th></tr>')
         for orders in customers.values():
