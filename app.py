@@ -118,4 +118,7 @@ def create_app():
     app.meli = configure_meli(crm)
     if crm:
         crm.meli = app.meli
+    from alerts import configure as configure_alerts
+    if crm:
+        crm.alerts = configure_alerts(crm)
     return app

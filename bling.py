@@ -247,6 +247,14 @@ class Bling:
                 parts.append('<p>Consulta Mercado Livre pendente: ' + esc(meli_error) + '</p>')
         if self.rules.get('orders') and not (self.meli and self.meli.summary()[0]):
             parts.append('<p>Compras e informações de envio dos pedidos já conferidos foram confirmadas pelo responsável. Novos pedidos continuam a conferir até validação. O andamento logístico automático ainda não está conectado.</p>')
+        if getattr(self, 'alerts', None):
+            label, deliveries = self.alerts.status()
+            parts.append('<p>' + esc(label) + '</p>')
+            with self.store.connect() as db:
+                email_error = self.get(db, 'email_error')
+            if email_error:
+                parts.append('<p>' + esc(email_error) + '</p>')
+            parts.extend('<p><small>' + esc(delivery) + '</small></p>' for delivery in deliveries)
         parts.append('<h2>Histórico de clientes</h2><table><tr><th>Cliente</th><th>Documento mascarado</th><th>Pedidos importados</th><th>Compras válidas</th><th>Perfil</th><th>Primeira compra válida</th><th>Última compra válida</th><th>Produtos nas compras válidas</th></tr>')
         for orders in customers.values():
             latest = max(orders, key=lambda x: x['date'])
