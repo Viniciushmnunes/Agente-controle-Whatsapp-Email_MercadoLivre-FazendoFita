@@ -40,12 +40,13 @@ class Store:
 
 
 class Webhook:
-    def __init__(self, verify_token, app_secret, store):
+    def __init__(self, verify_token, app_secret, store, bling=None):
         if not verify_token or not app_secret:
             raise ValueError('VERIFY_TOKEN and META_APP_SECRET are required')
         self.verify_token = verify_token
         self.app_secret = app_secret.encode()
         self.store = store
+        self.bling = bling
 
     def __call__(self, environ, start_response):
         def respond(status, text):
@@ -54,6 +55,8 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if self.bling and (path == '/crm' or path in ('/bling/connect', '/bling/callback', '/bling/stores', '/bling/statuses')):
+            return self.bling.handle(environ, start_response)
         if path == '/healthz' and method == 'GET':
             try:
                 with self.store.connect() as db:
@@ -105,4 +108,5 @@ def create_app():
     if os.environ.get('RENDER') and not os.environ.get('DATABASE_URL'):
         raise ValueError('Render requires persistent Postgres DATABASE_URL')
     store = Store(os.environ.get('DATABASE_URL'), os.environ.get('SQLITE_PATH'))
-    return Webhook(os.environ.get('VERIFY_TOKEN'), os.environ.get('META_APP_SECRET'), store)
+    from bling import configure
+    return Webhook(os.environ.get('VERIFY_TOKEN'), os.environ.get('META_APP_SECRET'), store, configure(store))
