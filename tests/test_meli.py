@@ -26,7 +26,7 @@ class MeliTests(BlingTests):
         if path == '/orders/102':
             return {'seller': {'id': 88}, 'status': 'paid'}
         if path == '/shipments/103':
-            return {'sender_id': 88, 'status': 'delivered', 'substatus': None}
+            return {'origin': {'sender_id': 88}, 'status': 'delivered', 'substatus': None}
         if path == '/shipments/103/sla':
             return {'expected_date': '2026-10-13T18:00:00-03:00'}
         raise BlingError('Mercado Livre HTTP 404')
@@ -68,6 +68,18 @@ class MeliTests(BlingTests):
             self.integration.resolve('101', 99)
         with self.assertRaises(BlingError):
             self.integration.read('https://evil.test/')
+
+    def test_shipment_origin_must_match_authorized_seller(self):
+        self.seed_token()
+        original = self.integration.transport
+        for origin in ({'sender_id': 99}, {}):
+            def response(method, url, headers, body=None):
+                if urlparse(url).path == '/shipments/103':
+                    return {'origin': origin, 'sender_id': 88, 'status': 'delivered'}
+                return original(method, url, headers, body)
+            self.integration.transport = response
+            with self.assertRaisesRegex(BlingError, 'Envio de outra conta'):
+                self.integration.resolve('101', 88)
 
     def test_notifications_are_only_bounded_signals(self):
         self.seed_token()

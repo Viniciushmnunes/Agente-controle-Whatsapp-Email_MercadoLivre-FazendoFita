@@ -111,7 +111,9 @@ class Meli:
         if not shipment_id:
             raise BlingError('Envio não identificado; conferir no Mercado Livre')
         shipment = self.read('/shipments/' + str(int(shipment_id)))
-        if str(shipment.get('sender_id')) != str(seller):
+        # x-format-new places the sender inside origin, rather than at the root.
+        sender_id = (shipment.get('origin') or {}).get('sender_id')
+        if str(sender_id) != str(seller):
             raise BlingError('Envio de outra conta; consulta descartada')
         deadline, deadline_error = None, None
         try:
