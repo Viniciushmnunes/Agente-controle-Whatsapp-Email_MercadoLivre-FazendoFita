@@ -20,6 +20,17 @@ class Alerts:
         self.sender = sender or self.smtp
         with self.store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS email_deliveries (job TEXT NOT NULL, recipient TEXT NOT NULL, state TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(job,recipient))')
+            db.execute('CREATE TABLE IF NOT EXISTS email_completed_orders (recipient TEXT NOT NULL, order_key TEXT NOT NULL, PRIMARY KEY(recipient,order_key))')
+        # The owner confirmed that this delivered order was in today's old-format report.
+        if str(self.crm.shop) == '206307158':
+            for row in self.crm.snapshot()[0]:
+                if row['external_number'] == '2000015410851473':
+                    with self.store.connect() as db:
+                        for recipient in RECIPIENTS:
+                            sent = db.execute(f'SELECT 1 FROM email_deliveries WHERE recipient={self.p} AND state={self.p} AND job LIKE {self.p}', (recipient, 'accepted', 'summary:2026-10-11:%')).fetchone()
+                            if sent:
+                                db.execute(f'INSERT INTO email_completed_orders VALUES ({self.p},{self.p}) ON CONFLICT DO NOTHING', (recipient, row['key']))
+
 
     def smtp(self, recipient, subject, body):
         message = EmailMessage()
@@ -45,7 +56,7 @@ class Alerts:
         except (KeyError, ValueError, TypeError):
             return False
 
-    def summary(self, now):
+    def summary(self, now, recipient=None, with_completed=False):
         rows, _, imported, error, connected = self.crm.snapshot()
         lines = ['Fazendo Fita — resumo de pedidos', now.astimezone(ZONE).strftime('%d/%m/%Y às %H:%M (Brasília)'), '']
         if not connected or not imported:
@@ -55,17 +66,21 @@ class Alerts:
             if error or age > 900:
                 lines.append('ATENÇÃO: importação pendente ou desatualizada; os pedidos abaixo podem estar incompletos.')
             lines.append('Última importação: ' + datetime.fromisoformat(imported).astimezone(ZONE).strftime('%d/%m/%Y às %H:%M'))
-        pending = [row for row in rows if not self.delivered(row, now)]
+        with self.store.connect() as db:
+            acknowledged = {r[0] for r in db.execute(f'SELECT order_key FROM email_completed_orders WHERE recipient={self.p}', (recipient,)).fetchall()} if recipient else set()
+        completed = {row['key'] for row in rows if self.delivered(row, now)}
+        pending = [row for row in rows if row['key'] not in completed or row['key'] not in acknowledged]
         for row in sorted(pending, key=lambda r: r['date'], reverse=True):
             lines.extend(['', 'Pedido Bling ' + str(row['bling_number']) + ' | Mercado Livre ' + str(row['external_number']),
-                          self.crm.delivery_action(row),
+                          ('ENTREGA CONFIRMADA — processo concluído; esta é a última confirmação no resumo.' if row['key'] in completed else self.crm.delivery_action(row)),
                           'Produtos: ' + self.crm.money(row.get('products_total')) + ' | Frete: ' + self.crm.money(row.get('freight')) + ' | Total: ' + self.crm.money(row['total'])])
         if rows and not pending:
             lines.append('Nenhum pedido pendente entre os pedidos importados: todos têm entrega confirmada em consulta recente.')
         if not rows:
             lines.append('Nenhum pedido disponível no painel; isso não confirma ausência de vendas.')
         lines.extend(['', 'Conferir detalhes: https://fazendo-fita-webhook.onrender.com/crm', 'Resumo interno. Nenhuma mensagem é enviada aos compradores.'])
-        return '\n'.join(lines)
+        body = '\n'.join(lines)
+        return (body, completed - acknowledged) if with_completed else body
 
     def deliver(self, job, subject, body, now):
         # Commit the claim before SMTP: uncertain attempts are never repeated automatically.
@@ -75,12 +90,16 @@ class Alerts:
             if not claimed:
                 continue
             try:
-                self.sender(recipient, subject, body)
+                message, completed = body(recipient) if callable(body) else (body, set())
+                self.sender(recipient, subject, message)
                 state = 'accepted'
             except Exception:
                 state = 'uncertain'
             with self.store.connect() as db:
                 db.execute(f'UPDATE email_deliveries SET state={self.p},updated={self.p} WHERE job={self.p} AND recipient={self.p}', (state, datetime.now(timezone.utc).isoformat(), job, recipient))
+                if state == 'accepted':
+                    for key in completed:
+                        db.execute(f'INSERT INTO email_completed_orders VALUES ({self.p},{self.p}) ON CONFLICT DO NOTHING', (recipient, key))
 
     def tick(self, now):
         test_id = self.settings.get('EMAIL_TEST_ID', '')
@@ -94,7 +113,7 @@ class Alerts:
             # Short grace period handles restarts without sending old summaries hours later.
             if 0 <= (local - due).total_seconds() < 900:
                 job = 'summary:' + due.strftime('%Y-%m-%d:%H%M')
-                self.deliver(job, 'Fazendo Fita — pedidos ' + due.strftime('%d/%m %H:%M'), self.summary(now), now)
+                self.deliver(job, 'Fazendo Fita — pedidos ' + due.strftime('%d/%m %H:%M'), lambda recipient: self.summary(now, recipient, True), now)
 
     def status(self):
         with self.store.connect() as db:
@@ -102,7 +121,7 @@ class Alerts:
         scheduled = self.settings.get('EMAIL_ENABLED', '').lower() == 'true'
         label = 'E-mails: resumos às 12h e às 16h30 (Brasília).' if scheduled else 'E-mails: envio de teste; resumos automáticos ainda desativados.'
         labels = {'accepted': 'aceito pelo servidor de envio; conferir recebimento', 'sending': 'tentativa iniciada; conferir recebimento', 'uncertain': 'falha ou resultado incerto; conferir configuração e recebimento'}
-        label += ' Pedidos com entrega confirmada em consulta recente ficam fora dos resumos.'
+        label += ' Entregas aparecem uma vez para confirmar a conclusão e depois ficam fora dos resumos.'
         return label, [' | '.join((job, recipient, labels[state])) for job, recipient, state in rows]
 
     def run(self):

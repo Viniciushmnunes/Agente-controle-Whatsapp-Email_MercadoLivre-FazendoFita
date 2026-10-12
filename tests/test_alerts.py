@@ -71,8 +71,12 @@ class AlertTests(unittest.TestCase):
         self.crm.meli = Mock()
         self.crm.meli.action.return_value = 'API status'
         self.crm.meli.lookup.return_value = {'status': 'delivered', 'checked_at': now.isoformat()}
-        self.assertNotIn('Pedido Bling 1', self.alerts.summary(now))
-        self.assertIn('Nenhum pedido pendente', self.alerts.summary(now))
+        self.assertIn('ENTREGA CONFIRMADA', self.alerts.summary(now))
+        self.alerts.tick(now)
+        self.assertTrue(all('ENTREGA CONFIRMADA' in mail[2] for mail in self.sent))
+        for recipient in RECIPIENTS:
+            self.assertNotIn('Pedido Bling 1', self.alerts.summary(now, recipient))
+            self.assertIn('Nenhum pedido pendente', self.alerts.summary(now, recipient))
         self.assertEqual(len(self.crm.snapshot()[0]), 1)
         for data in ({'status': 'delivered', 'checked_at': '2026-10-11T14:00:00+00:00'},
                      {'status': 'delivered', 'checked_at': now.isoformat(), 'error': 'API failed'},
@@ -80,3 +84,21 @@ class AlertTests(unittest.TestCase):
                      {'status': 'delivered', 'checked_at': 'invalid'}):
             self.crm.meli.lookup.return_value = data
             self.assertIn('Pedido Bling 1', self.alerts.summary(now))
+
+    def test_completion_recorded_only_for_successful_recipient_and_survives_restart(self):
+        from unittest.mock import Mock
+        import json
+        now = datetime(2026, 10, 11, 15, 0, tzinfo=timezone.utc)
+        row = self.crm.normalize(self.fixture.order(), {'id': 1})
+        with self.crm.store.connect() as db:
+            db.execute('INSERT INTO crm_orders VALUES (?,?)', (row['key'], json.dumps(row)))
+        self.crm.meli = Mock()
+        self.crm.meli.lookup.return_value = {'status': 'delivered', 'checked_at': now.isoformat()}
+        def send(recipient, *args):
+            if recipient == RECIPIENTS[0]:
+                raise RuntimeError('failed')
+        self.alerts.sender = send
+        self.alerts.tick(now)
+        restarted = Alerts(self.crm, {'EMAIL_ENABLED': 'true'}, lambda *args: None)
+        self.assertIn('ENTREGA CONFIRMADA', restarted.summary(now, RECIPIENTS[0]))
+        self.assertNotIn('Pedido Bling 1', restarted.summary(now, RECIPIENTS[1]))
