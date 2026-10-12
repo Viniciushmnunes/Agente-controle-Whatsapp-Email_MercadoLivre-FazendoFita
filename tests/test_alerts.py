@@ -60,3 +60,23 @@ class AlertTests(unittest.TestCase):
         self.assertNotIn('12345678909', body)
         self.crm.rules['excluded_bling_numbers'] = ['1']
         self.assertNotIn('Pedido Bling 1', self.alerts.summary(now))
+
+    def test_delivered_omitted_but_stale_failed_and_open_shipments_remain(self):
+        from unittest.mock import Mock
+        import json
+        now = datetime(2026, 10, 11, 15, 0, tzinfo=timezone.utc)
+        row = self.crm.normalize(self.fixture.order(), {'id': 1})
+        with self.crm.store.connect() as db:
+            db.execute('INSERT INTO crm_orders VALUES (?,?)', (row['key'], json.dumps(row)))
+        self.crm.meli = Mock()
+        self.crm.meli.action.return_value = 'API status'
+        self.crm.meli.lookup.return_value = {'status': 'delivered', 'checked_at': now.isoformat()}
+        self.assertNotIn('Pedido Bling 1', self.alerts.summary(now))
+        self.assertIn('Nenhum pedido pendente', self.alerts.summary(now))
+        self.assertEqual(len(self.crm.snapshot()[0]), 1)
+        for data in ({'status': 'delivered', 'checked_at': '2026-10-11T14:00:00+00:00'},
+                     {'status': 'delivered', 'checked_at': now.isoformat(), 'error': 'API failed'},
+                     {'status': 'pending', 'checked_at': now.isoformat()},
+                     {'status': 'delivered', 'checked_at': 'invalid'}):
+            self.crm.meli.lookup.return_value = data
+            self.assertIn('Pedido Bling 1', self.alerts.summary(now))

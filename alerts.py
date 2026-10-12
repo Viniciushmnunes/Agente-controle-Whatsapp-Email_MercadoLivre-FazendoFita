@@ -33,6 +33,18 @@ class Alerts:
             if client.send_message(message):
                 raise RuntimeError('Recipient refused')
 
+    def delivered(self, row, now):
+        if not self.crm.meli:
+            return False
+        data = self.crm.meli.lookup(row)
+        if not data or data.get('error') or data.get('status') != 'delivered':
+            return False
+        try:
+            age = (now - datetime.fromisoformat(data['checked_at'])).total_seconds()
+            return 0 <= age <= 900
+        except (KeyError, ValueError, TypeError):
+            return False
+
     def summary(self, now):
         rows, _, imported, error, connected = self.crm.snapshot()
         lines = ['Fazendo Fita — resumo de pedidos', now.astimezone(ZONE).strftime('%d/%m/%Y às %H:%M (Brasília)'), '']
@@ -43,10 +55,13 @@ class Alerts:
             if error or age > 900:
                 lines.append('ATENÇÃO: importação pendente ou desatualizada; os pedidos abaixo podem estar incompletos.')
             lines.append('Última importação: ' + datetime.fromisoformat(imported).astimezone(ZONE).strftime('%d/%m/%Y às %H:%M'))
-        for row in sorted(rows, key=lambda r: r['date'], reverse=True):
+        pending = [row for row in rows if not self.delivered(row, now)]
+        for row in sorted(pending, key=lambda r: r['date'], reverse=True):
             lines.extend(['', 'Pedido Bling ' + str(row['bling_number']) + ' | Mercado Livre ' + str(row['external_number']),
                           self.crm.delivery_action(row),
                           'Produtos: ' + self.crm.money(row.get('products_total')) + ' | Frete: ' + self.crm.money(row.get('freight')) + ' | Total: ' + self.crm.money(row['total'])])
+        if rows and not pending:
+            lines.append('Nenhum pedido pendente entre os pedidos importados: todos têm entrega confirmada em consulta recente.')
         if not rows:
             lines.append('Nenhum pedido disponível no painel; isso não confirma ausência de vendas.')
         lines.extend(['', 'Conferir detalhes: https://fazendo-fita-webhook.onrender.com/crm', 'Resumo interno. Nenhuma mensagem é enviada aos compradores.'])
@@ -87,6 +102,7 @@ class Alerts:
         scheduled = self.settings.get('EMAIL_ENABLED', '').lower() == 'true'
         label = 'E-mails: resumos às 12h e às 16h30 (Brasília).' if scheduled else 'E-mails: envio de teste; resumos automáticos ainda desativados.'
         labels = {'accepted': 'aceito pelo servidor de envio; conferir recebimento', 'sending': 'tentativa iniciada; conferir recebimento', 'uncertain': 'falha ou resultado incerto; conferir configuração e recebimento'}
+        label += ' Pedidos com entrega confirmada em consulta recente ficam fora dos resumos.'
         return label, [' | '.join((job, recipient, labels[state])) for job, recipient, state in rows]
 
     def run(self):
