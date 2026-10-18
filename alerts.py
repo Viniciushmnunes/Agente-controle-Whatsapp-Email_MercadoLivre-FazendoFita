@@ -44,15 +44,20 @@ class Alerts:
             if client.send_message(message):
                 raise RuntimeError('Recipient refused')
 
-    def delivered(self, row, now):
+    def conclusion(self, row, now):
         if not self.crm.meli:
             return False
         data = self.crm.meli.lookup(row)
-        if not data or data.get('error') or data.get('status') != 'delivered':
+        if not data or data.get('error'):
             return False
         try:
             age = (now - datetime.fromisoformat(data['checked_at'])).total_seconds()
-            return 0 <= age <= 900
+            if not 0 <= age <= 900:
+                return None
+            statuses = data.get('order_statuses') or []
+            if statuses and all(status == 'cancelled' for status in statuses):
+                return 'cancelled'
+            return 'delivered' if data.get('status') == 'delivered' else None
         except (KeyError, ValueError, TypeError):
             return False
 
@@ -68,14 +73,16 @@ class Alerts:
             lines.append('Última importação: ' + datetime.fromisoformat(imported).astimezone(ZONE).strftime('%d/%m/%Y às %H:%M'))
         with self.store.connect() as db:
             acknowledged = {r[0] for r in db.execute(f'SELECT order_key FROM email_completed_orders WHERE recipient={self.p}', (recipient,)).fetchall()} if recipient else set()
-        completed = {row['key'] for row in rows if self.delivered(row, now)}
-        pending = [row for row in rows if row['key'] not in completed or row['key'] not in acknowledged]
+        conclusions = {row['key']: self.conclusion(row, now) for row in rows}
+        event_keys = {key: ('cancelled:' + key if status == 'cancelled' else key) for key, status in conclusions.items() if status}
+        completed = set(event_keys.values())
+        pending = [row for row in rows if event_keys.get(row['key']) not in acknowledged]
         for row in sorted(pending, key=lambda r: r['date'], reverse=True):
             lines.extend(['', 'Pedido Bling ' + str(row['bling_number']) + ' | Mercado Livre ' + str(row['external_number']),
-                          ('ENTREGA CONFIRMADA — processo concluído; esta é a última confirmação no resumo.' if row['key'] in completed else self.crm.delivery_action(row)),
+                          ('CANCELAMENTO CONFIRMADO — venda cancelada; este é o último aviso no resumo.' if conclusions[row['key']] == 'cancelled' else 'ENTREGA CONFIRMADA — processo concluído; esta é a última confirmação no resumo.' if conclusions[row['key']] == 'delivered' else self.crm.delivery_action(row)),
                           'Produtos: ' + self.crm.money(row.get('products_total')) + ' | Frete: ' + self.crm.money(row.get('freight')) + ' | Total: ' + self.crm.money(row['total'])])
         if rows and not pending:
-            lines.append('Nenhum pedido pendente entre os pedidos importados: todos têm entrega confirmada em consulta recente.')
+            lines.append('Nenhum pedido pendente entre os pedidos importados: as entregas e os cancelamentos confirmados já foram informados.')
         if not rows:
             lines.append('Nenhum pedido disponível no painel; isso não confirma ausência de vendas.')
         lines.extend(['', 'Conferir detalhes: https://fazendo-fita-webhook.onrender.com/crm', 'Resumo interno. Nenhuma mensagem é enviada aos compradores.'])
@@ -121,7 +128,7 @@ class Alerts:
         scheduled = self.settings.get('EMAIL_ENABLED', '').lower() == 'true'
         label = 'E-mails: resumos às 12h e às 16h30 (Brasília).' if scheduled else 'E-mails: envio de teste; resumos automáticos ainda desativados.'
         labels = {'accepted': 'aceito pelo servidor de envio; conferir recebimento', 'sending': 'tentativa iniciada; conferir recebimento', 'uncertain': 'falha ou resultado incerto; conferir configuração e recebimento'}
-        label += ' Entregas aparecem uma vez para confirmar a conclusão e depois ficam fora dos resumos.'
+        label += ' Entregas e cancelamentos aparecem uma vez e depois ficam fora dos resumos.'
         return label, [' | '.join((job, recipient, labels[state])) for job, recipient, state in rows]
 
     def run(self):

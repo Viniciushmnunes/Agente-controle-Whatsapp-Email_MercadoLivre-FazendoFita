@@ -81,6 +81,23 @@ class MeliTests(BlingTests):
             with self.assertRaisesRegex(BlingError, 'Envio de outra conta'):
                 self.integration.resolve('101', 88)
 
+    def test_cancelled_order_without_shipment_is_reconciled(self):
+        self.seed_token()
+        original = self.integration.transport
+        def response(method, url, headers, body=None):
+            path = urlparse(url).path
+            if path == '/packs/101':
+                return {'orders': [{'id': 102}]}
+            if path == '/orders/102':
+                return {'seller': {'id': 88}, 'status': 'cancelled'}
+            if path.startswith('/shipments/'):
+                self.fail('Cancelled orders do not require a shipment lookup')
+            return original(method, url, headers, body)
+        self.integration.transport = response
+        result = self.integration.resolve('101', 88)
+        self.assertEqual(result['order_statuses'], ['cancelled'])
+        self.assertEqual(result['status'], 'cancelled')
+
     def test_notifications_are_only_bounded_signals(self):
         self.seed_token()
         event = {'application_id': 1234, 'user_id': 88, 'topic': 'shipments', 'resource': '/shipments/103', 'status': 'cancelled'}

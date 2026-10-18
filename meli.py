@@ -105,6 +105,8 @@ class Meli:
             shipment_id = (pack.get('shipment') or {}).get('id')
         if not orders or any(str(o.get('seller', {}).get('id')) != str(seller) for o in orders):
             raise BlingError('Pedido não pertence exclusivamente à conta autorizada')
+        if all(o.get('status') == 'cancelled' for o in orders):
+            return {'status': 'cancelled', 'order_statuses': [o['status'] for o in orders], 'checked_at': datetime.now(timezone.utc).isoformat()}
         ids = {str((o.get('shipping') or {}).get('id')) for o in orders if (o.get('shipping') or {}).get('id')}
         if not shipment_id and len(ids) == 1:
             shipment_id = ids.pop()

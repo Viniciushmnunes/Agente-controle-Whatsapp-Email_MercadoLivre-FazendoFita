@@ -102,3 +102,34 @@ class AlertTests(unittest.TestCase):
         restarted = Alerts(self.crm, {'EMAIL_ENABLED': 'true'}, lambda *args: None)
         self.assertIn('ENTREGA CONFIRMADA', restarted.summary(now, RECIPIENTS[0]))
         self.assertNotIn('Pedido Bling 1', restarted.summary(now, RECIPIENTS[1]))
+
+    def test_cancelled_announced_once_per_recipient_and_delivery_receipt_does_not_hide_it(self):
+        from unittest.mock import Mock
+        import json
+        now = datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc)
+        row = self.crm.normalize(self.fixture.order(), {'id': 1})
+        with self.crm.store.connect() as db:
+            db.execute('INSERT INTO crm_orders VALUES (?,?)', (row['key'], json.dumps(row)))
+            db.execute('INSERT INTO email_completed_orders VALUES (?,?)', (RECIPIENTS[0], row['key']))
+        self.crm.meli = Mock()
+        self.crm.meli.action.return_value = 'Conferir cancelamento'
+        self.crm.meli.lookup.return_value = {'status': 'cancelled', 'order_statuses': ['cancelled'], 'checked_at': now.isoformat()}
+        self.assertIn('CANCELAMENTO CONFIRMADO', self.alerts.summary(now, RECIPIENTS[0]))
+        def send(recipient, subject, body):
+            self.sent.append((recipient, body))
+            if recipient == RECIPIENTS[0]:
+                raise RuntimeError('failed')
+        self.alerts.sender = send
+        self.alerts.tick(now)
+        self.assertTrue(all('CANCELAMENTO CONFIRMADO' in body for _, body in self.sent))
+        restarted = Alerts(self.crm, {'EMAIL_ENABLED': 'true'}, send)
+        self.assertIn('CANCELAMENTO CONFIRMADO', restarted.summary(now, RECIPIENTS[0]))
+        self.assertNotIn('Pedido Bling 1', restarted.summary(now, RECIPIENTS[1]))
+        self.assertEqual(len(self.crm.snapshot()[0]), 1)
+        for data in ({'status': 'cancelled', 'order_statuses': ['paid'], 'checked_at': now.isoformat()},
+                     {'status': 'cancelled', 'order_statuses': ['cancelled'], 'checked_at': '2026-10-17T15:00:00+00:00'},
+                     {'status': 'cancelled', 'order_statuses': ['cancelled'], 'checked_at': now.isoformat(), 'error': 'API failed'}):
+            self.crm.meli.lookup.return_value = data
+            body = restarted.summary(now, RECIPIENTS[1])
+            self.assertIn('Pedido Bling 1', body)
+            self.assertNotIn('CANCELAMENTO CONFIRMADO', body)
