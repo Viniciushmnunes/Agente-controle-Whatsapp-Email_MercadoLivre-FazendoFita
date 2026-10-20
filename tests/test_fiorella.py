@@ -17,6 +17,7 @@ class FiorellaTests(TestCase):
         self.now = datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
         self.calls = []
         self.event = dict(assistantId=self.monitor.agent, channel='CLOUD_API', contextId='chat-1', messageId='incoming-1', role='user', contactPhone=TEST_PHONE, contactName='Owner', message=TEST_TRIGGER, date=self.now.isoformat())
+        self.monitor.save(self.event, self.now)
         self.messages = [dict(id='incoming-1', role='user', text=TEST_TRIGGER, time=int(self.now.timestamp()*1000))]
         self.chat = dict(id='chat-1', agentId=self.monitor.agent, whatsappPhone=TEST_PHONE)
         self.fail_send = False
@@ -47,7 +48,7 @@ class FiorellaTests(TestCase):
         self.assertEqual(self.calls, [])
 
     def test_canonical_phone_agent_context_message_and_time_required(self):
-        for field, bad in [('agentId', 'other'), ('whatsappPhone', '5537999999999')]:
+        for field, bad in [('id', 'other'), ('whatsappPhone', '5537999999999')]:
             original = self.chat[field]
             self.chat[field] = bad
             with self.assertRaises(ProviderError):

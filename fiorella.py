@@ -61,18 +61,20 @@ class Fiorella:
     def test_chat(self):
         matches = []
         checked = []
+        known_contexts = {r['contextId'] for r in self.monitor.latest() if r.get('contactPhone') == TEST_PHONE}
         for workspace in self.read_list('/workspaces')[:3]:
             workspace_id = self.segment(workspace.get('id'))
-            # Restrict to the configured agent, then verify returned agent and phone.
-            query = urllib.parse.urlencode({'agentId': self.monitor.agent, 'page': 1, 'pageSize': 100})
+            # The current channel model may omit agentId on human-controlled chats.
+            # Match the canonical chat ID to the already observed owner context.
+            query = urllib.parse.urlencode({'page': 1, 'pageSize': 100})
             chats = self.read_list('/workspace/' + workspace_id + '/chats?' + query)
             checked.extend(chats)
             for chat in chats:
                 phones = [re.sub(r'\D', '', str(chat.get(key, ''))) for key in ('recipient', 'whatsappPhone')]
-                if chat.get('agentId') == self.monitor.agent and TEST_PHONE in phones:
+                if chat.get('id') in known_contexts and TEST_PHONE in phones:
                     self.segment(chat.get('id'))
                     matches.append(chat)
-        self.diagnostics = {'chats_read': len(checked), 'chat_fields': sorted({key for row in checked for key in row}), 'agent_matches': sum(row.get('agentId') == self.monitor.agent for row in checked), 'phone_matches': {field: sum(re.sub(r'\D', '', str(row.get(field, ''))) == TEST_PHONE for row in checked) for field in ('recipient', 'whatsappPhone', 'userId')}}
+        self.diagnostics = {'chats_read': len(checked), 'chat_fields': sorted({key for row in checked for key in row}), 'context_matches': sum(row.get('id') in known_contexts for row in checked), 'agent_matches': sum(row.get('agentId') == self.monitor.agent for row in checked), 'phone_matches': {field: sum(re.sub(r'\D', '', str(row.get(field, ''))) == TEST_PHONE for row in checked) for field in ('recipient', 'whatsappPhone', 'userId')}}
         if len(matches) != 1:
             raise ProviderError('test conversation not uniquely identified')
         return matches[0]
