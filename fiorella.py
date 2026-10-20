@@ -24,6 +24,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Fiorella:
     def __init__(self, monitor, token, transport=None):
         self.monitor, self.token = monitor, token
+        self.diagnostics = {}
         self.transport = transport or self.request
         self.p = monitor.placeholder
         with monitor.store.connect() as db:
@@ -59,16 +60,19 @@ class Fiorella:
 
     def test_chat(self):
         matches = []
+        checked = []
         for workspace in self.read_list('/workspaces')[:3]:
             workspace_id = self.segment(workspace.get('id'))
             # Restrict to the configured agent, then verify returned agent and phone.
             query = urllib.parse.urlencode({'agentId': self.monitor.agent, 'page': 1, 'pageSize': 100})
             chats = self.read_list('/workspace/' + workspace_id + '/chats?' + query)
+            checked.extend(chats)
             for chat in chats:
-                phone = re.sub(r'\D', '', str(chat.get('whatsappPhone', '')))
-                if chat.get('agentId') == self.monitor.agent and phone == TEST_PHONE:
+                phones = [re.sub(r'\D', '', str(chat.get(key, ''))) for key in ('recipient', 'whatsappPhone')]
+                if chat.get('agentId') == self.monitor.agent and TEST_PHONE in phones:
                     self.segment(chat.get('id'))
                     matches.append(chat)
+        self.diagnostics = {'chats_read': len(checked), 'chat_fields': sorted({key for row in checked for key in row}), 'agent_matches': sum(row.get('agentId') == self.monitor.agent for row in checked), 'phone_matches': {field: sum(re.sub(r'\D', '', str(row.get(field, ''))) == TEST_PHONE for row in checked) for field in ('recipient', 'whatsappPhone', 'userId')}}
         if len(matches) != 1:
             raise ProviderError('test conversation not uniquely identified')
         return matches[0]
@@ -86,7 +90,7 @@ class Fiorella:
                 'message_id_matches': any(m.get('id') == r['messageId'] for m in messages for r in local),
                 'pilot': 'owner only; exact trigger: ' + TEST_TRIGGER}
         except ProviderError as error:
-            return {'ready': False, 'status': str(error)}
+            return {'ready': False, 'status': str(error), 'diagnostics': self.diagnostics}
 
     def maybe_send(self, event, now=None):
         now = now or datetime.now(timezone.utc)
