@@ -39,3 +39,16 @@ A rotina de e-mail existente verifica os prazos aproximadamente a cada 30 segund
 A Fiorella foi aprovada como saudação única, mas o envio ainda não está configurado. O agente GPT Maker continua inativo. Não ativá-lo com apenas um prompt: isso não garante uma única mensagem nem a distinção de origem nos webhooks. A tabela monitor_automatic_messages permite registrar IDs retornados por um futuro envio confiável, inclusive antes de o webhook chegar. Mensagens registradas como automáticas não encerram espera. Como proteção adicional, o texto exato da saudação aprovada também mantém a espera, inclusive se copiado manualmente; não é prova de origem. Qualquer variação enviada por um agente ativo pode ser confundida com resposta, portanto a ativação depende de um fluxo validado com identificação confiável de mensagens e envio uma vez por atendimento.
 
 Texto aprovado: Olá! Sou a Fiorella, assistente virtual da Fazendo Fita. Recebemos sua mensagem! Uma pessoa da nossa equipe dará continuidade ao seu atendimento assim que possível. 🌷
+
+
+## Piloto da Fiorella — somente conversa do responsável
+
+A chave GPTMAKER_API_KEY fica apenas no ambiente do Render. fiorella.py implementa um piloto limitado ao telefone do responsável já validado nos testes. Somente a mensagem exata `Teste Fiorella`, role=user, recebida há até cinco minutos pode disparar uma saudação. Outros contatos e textos não disparam envio. Não ativa o agente de IA e não modifica seu comportamento.
+
+Antes do envio, o serviço consulta os workspaces, os primeiros 100 chats filtrados pelo agente configurado e o histórico da conversa. Exige correspondência única de telefone, agente, contexto, ID da mensagem, papel user, texto e horário recente na API. Falha de consulta ou esquema diferente impede envio, sem perder o evento já salvo. O acesso público ao webhook sozinho não autoriza mensagem a um cliente arbitrário.
+
+Usa POST /v2/chat/{chatId}/send-message somente com o texto fixo aprovado. A resposta documentada contém apenas success, sem ID da mensagem. Após aceitação, consulta novamente o histórico para registrar IDs de saudações correspondentes como automáticos; a comparação exata do texto aprovado também preserva o relógio durante essa reconciliação. Não responde dúvidas nem gera texto por IA.
+
+A tentativa é registrada antes do POST no banco, uma vez para a conversa de teste (versão v1 do piloto). Resultado incerto não é repetido automaticamente; accepted indica somente aceitação da API. Eventos novos, repetições e reinícios não geram outra saudação nessa conversa. Isso é uma restrição do piloto, não a definição final de abertura de novos atendimentos.
+
+GET /monitor/fiorella exige o login privado e mostra chave presente, modo e estados das tentativas, sem chave ou conteúdo das conversas. GET /monitor/fiorella/probe verifica leitura na API e expõe apenas nomes de campos e indicadores de correspondência, sem enviar mensagens. Nenhuma dessas páginas habilita envio geral. A liberação aos clientes ainda depende de validar entrega, retorno do webhook, preservação do prazo e a regra para uma nova saudação em um novo atendimento.

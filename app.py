@@ -57,7 +57,7 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
-        if self.monitor and path in ('/monitor', '/monitor/events'):
+        if self.monitor and path in ('/monitor', '/monitor/events', '/monitor/fiorella', '/monitor/fiorella/probe'):
             return self.monitor.handle(environ, start_response)
         if self.meli and path in ('/meli/connect', '/meli/callback', '/meli/notifications'):
             return self.meli.handle(environ, start_response)
@@ -122,6 +122,8 @@ def create_app():
     if crm:
         from monitor import Monitor
         app.monitor = Monitor(store, dict(crm.settings, **{k: v for k, v in os.environ.items() if k == 'GPTMAKER_MONITOR_AGENT_ID'}))
+        from fiorella import Fiorella
+        app.monitor.fiorella = Fiorella(app.monitor, os.environ.get('GPTMAKER_API_KEY', ''))
         crm.monitor = app.monitor
         crm.meli = app.meli
     from alerts import configure as configure_alerts

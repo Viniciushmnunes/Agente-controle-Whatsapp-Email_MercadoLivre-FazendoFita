@@ -34,6 +34,8 @@ def business_deadline(start, minutes=60):
 
 class Monitor:
     def __init__(self, store, settings):
+        self.fiorella = None
+        self.fiorella_status = 'not attempted'
         self.store = store
         self.password = settings['CRM_ADMIN_PASSWORD']
         self.cipher = Fernet(settings['BLING_ENCRYPTION_KEY'].encode())
@@ -140,7 +142,7 @@ class Monitor:
                 text = row['message'] or f"[Sem texto; {row['mediaCount']} anexo(s)]"
                 parts.append('<tr>' + ''.join('<td>' + escape(v) + '</td>' for v in (row['contactName'] + '\n' + row['contactPhone'], fmt(datetime.fromisoformat(row['date'])), status, waiting, text[:2000])) + '</tr>')
             parts.append('</table><p>Exibindo até 200 conversas, priorizando os prazos vencidos. Anexos não são baixados.</p>')
-        parts.append('<p>Nenhuma resposta é enviada aos clientes por este painel. A saudação automática ainda não está ativada.</p></html>')
+        parts.append('<p>Fiorella: teste limitado ao celular do responsável, com a mensagem exata Teste Fiorella. O envio geral aos clientes está desativado. O agente de IA permanece inativo.</p></html>')
         return ''.join(parts)
 
     def handle(self, environ, start_response):
@@ -155,6 +157,11 @@ class Monitor:
         if not hmac.compare_digest(environ.get('HTTP_AUTHORIZATION', '').encode(), expected.encode()):
             return respond('401 Unauthorized', 'Acesso privado')
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if path in ('/monitor/fiorella', '/monitor/fiorella/probe') and method == 'GET':
+            if not self.fiorella:
+                return respond('200 OK', json.dumps({'key_configured': False}))
+            result = self.fiorella.probe() if path.endswith('/probe') else dict(self.fiorella.status(), last_result=self.fiorella_status)
+            return respond('200 OK', json.dumps(result))
         if (path, method) == ('/monitor', 'GET'):
             try:
                 return respond('200 OK', self.page(), True)
@@ -175,4 +182,9 @@ class Monitor:
             return respond('400 Bad Request', 'invalid event')
         except Exception:
             return respond('503 Service Unavailable', 'storage unavailable')
+        if self.fiorella:
+            try:
+                self.fiorella_status = self.fiorella.maybe_send(payload)
+            except Exception:
+                self.fiorella_status = 'pilot not completed; check read-only probe'
         return respond('200 OK', 'EVENT_STORED')

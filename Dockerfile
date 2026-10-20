@@ -3,7 +3,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --create-home webhook
-COPY app.py bling.py meli.py alerts.py monitor.py crm_rules.json ./
+COPY app.py bling.py meli.py alerts.py monitor.py fiorella.py crm_rules.json ./
 USER webhook
 EXPOSE 10000
 # Access logs disabled: verification URL contains a secret query parameter.
