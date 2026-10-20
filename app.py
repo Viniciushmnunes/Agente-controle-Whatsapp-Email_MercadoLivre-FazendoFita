@@ -48,6 +48,7 @@ class Webhook:
         self.store = store
         self.bling = bling
         self.meli = None
+        self.monitor = None
 
     def __call__(self, environ, start_response):
         def respond(status, text):
@@ -56,6 +57,8 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if self.monitor and path in ('/monitor', '/monitor/events'):
+            return self.monitor.handle(environ, start_response)
         if self.meli and path in ('/meli/connect', '/meli/callback', '/meli/notifications'):
             return self.meli.handle(environ, start_response)
         if self.bling and (path == '/crm' or path in ('/bling/connect', '/bling/callback', '/bling/stores', '/bling/statuses')):
@@ -117,6 +120,8 @@ def create_app():
     app = Webhook(os.environ.get('VERIFY_TOKEN'), os.environ.get('META_APP_SECRET'), store, crm)
     app.meli = configure_meli(crm)
     if crm:
+        from monitor import Monitor
+        app.monitor = Monitor(store, dict(crm.settings, **{k: v for k, v in os.environ.items() if k == 'GPTMAKER_MONITOR_AGENT_ID'}))
         crm.meli = app.meli
     from alerts import configure as configure_alerts
     if crm:

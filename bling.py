@@ -232,6 +232,7 @@ class Bling:
         rows, customers, last_sync, error, connected = self.snapshot()
         esc = lambda value: html.escape(str(value if value is not None else ''))
         parts = ['<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fazendo Fita — CRM</title><style>body{font:16px system-ui;max-width:1100px;margin:32px auto;padding:16px;color:#263238}table{border-collapse:collapse;width:100%;margin:20px 0}td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd}small{color:#666}</style><h1>Clientes e pedidos — Fazendo Fita</h1>']
+        parts.append('<p><a href="/monitor">Conversas do WhatsApp</a></p>')
         parts.append('<p>' + ('Bling conectado.' if connected else '<a href="/bling/connect">Conectar ao Bling</a>') + '</p>')
         parts.append('<p>Última importação (UTC): ' + esc(last_sync or 'Ainda não realizada') + '</p>')
         if error:
