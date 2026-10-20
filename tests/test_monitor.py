@@ -8,7 +8,7 @@ import unittest
 
 from cryptography.fernet import Fernet
 from app import Store, Webhook
-from monitor import Monitor
+from monitor import Monitor, business_deadline, FIORELLA_GREETING
 
 
 class MonitorTests(unittest.TestCase):
@@ -95,3 +95,55 @@ class MonitorTests(unittest.TestCase):
         (status, _), body = self.request('POST', '/monitor/events')
         self.assertEqual(status, '503 Service Unavailable')
         self.assertNotIn(b'private error', body)
+
+    def test_business_deadline_examples_and_weekend(self):
+        for start, end in [
+            ('2026-10-19T10:00:00-03:00', '2026-10-19T11:00:00-03:00'),
+            ('2026-10-19T17:40:00-03:00', '2026-10-20T08:40:00-03:00'),
+            ('2026-10-23T19:00:00-03:00', '2026-10-26T09:00:00-03:00'),
+            ('2026-10-23T17:40:00-03:00', '2026-10-26T08:40:00-03:00'),
+            ('2026-10-24T12:00:00-03:00', '2026-10-26T09:00:00-03:00'),
+            ('2026-10-19T07:00:00-03:00', '2026-10-19T09:00:00-03:00'),
+            ('2026-10-19T17:00:00-03:00', '2026-10-19T18:00:00-03:00'),
+            ('2026-10-19T18:00:00-03:00', '2026-10-20T09:00:00-03:00'),
+        ]:
+            with self.subTest(start=start):
+                self.assertEqual(business_deadline(datetime.fromisoformat(start)), datetime.fromisoformat(end))
+
+    def test_first_unanswered_message_starts_wait_and_new_messages_do_not_reset(self):
+        self.monitor.save(self.event(), self.now)
+        self.monitor.save(self.event(messageId='next', date='2026-10-20T16:30:00Z'), self.now)
+        row = self.monitor.conversations(self.now)[0]
+        self.assertEqual(row['deadline'], datetime(2026, 10, 20, 17, tzinfo=timezone.utc))
+        self.assertTrue(row['overdue'])
+        self.assertFalse(self.monitor.conversations(datetime(2026, 10, 20, 16, 59, tzinfo=timezone.utc))[0]['overdue'])
+        self.assertTrue(self.monitor.conversations(datetime(2026, 10, 20, 17, tzinfo=timezone.utc))[0]['overdue'])
+
+    def test_automated_receipt_does_not_close_wait_human_reply_does(self):
+        self.monitor.save(self.event(), self.now)
+        self.monitor.mark_automatic('greeting')
+        self.monitor.save(self.event(messageId='greeting', role='assistant', message='Automatic greeting', date='2026-10-20T16:01:00Z'), self.now)
+        row = self.monitor.conversations(self.now)[0]
+        original_key = row['pending_key']
+        self.assertTrue(row['overdue'])
+        self.monitor.save(self.event(messageId='human', role='assistant', date='2026-10-20T17:01:00Z'), self.now)
+        self.assertIsNone(self.monitor.conversations(self.now)[0]['pending_since'])
+        self.monitor.save(self.event(messageId='new-wait', date='2026-10-20T17:05:00Z'), self.now)
+        row = Monitor(self.store, self.settings).conversations(self.now)[0]
+        self.assertNotEqual(row['pending_key'], original_key)
+        self.assertEqual(row['deadline'], datetime(2026, 10, 20, 18, 5, tzinfo=timezone.utc))
+
+    def test_out_of_order_and_equal_timestamp_do_not_hide_wait(self):
+        self.monitor.save(self.event(messageId='human', role='assistant', date='2026-10-20T16:05:00Z'), self.now)
+        self.monitor.save(self.event(), self.now)
+        self.assertIsNone(self.monitor.conversations(self.now)[0]['pending_since'])
+        self.monitor.save(self.event(messageId='same-time', date='2026-10-20T16:05:00Z'), self.now)
+        self.assertIsNotNone(self.monitor.conversations(self.now)[0]['pending_since'])
+
+    def test_greeting_fail_safe_and_untrusted_flag(self):
+        self.monitor.save(self.event(), self.now)
+        self.monitor.save(self.event(messageId='receipt', role='assistant', message=FIORELLA_GREETING, date='2026-10-20T16:01:00Z'), self.now)
+        self.assertTrue(self.monitor.conversations(self.now)[0]['overdue'])
+        # Incoming arbitrary flags cannot suppress a real reply in this schema.
+        self.monitor.save(self.event(messageId='human', role='assistant', automatic=True, date='2026-10-20T17:00:00Z'), self.now)
+        self.assertIsNone(self.monitor.conversations(self.now)[0]['pending_since'])

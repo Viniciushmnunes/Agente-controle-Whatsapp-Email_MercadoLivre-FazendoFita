@@ -10,7 +10,7 @@ Os resumos contêm números dos pedidos, valores e ações do painel, sem nomes 
 
 Cada tentativa por horário e destinatário é registrada no banco antes de enviar. Isso evita duplicação em reinícios ou processos simultâneos. Falhas ou interrupções depois do registro podem deixar o resultado incerto; não são repetidas automaticamente, para evitar duplicatas. O painel mostra as tentativas e sua situação sem exibir erros do provedor ou credenciais. Aceito significa aceito pelo servidor SMTP, não comprovadamente recebido. Uma janela de 15 minutos permite pequeno atraso por reinício; horários perdidos não geram resumos antigos depois disso.
 
-A rotina depende do serviço Render estar em execução. Ainda não inclui leitura de e-mails, classificação de conversas ou alertas por WhatsApp. Não usa automações do aplicativo Codex: roda no serviço da loja.
+A rotina depende do serviço Render estar em execução. Ainda não inclui leitura de e-mails, classificação de intenção das conversas ou envio de alertas por WhatsApp. Inclui aviso interno por e-mail para espera de resposta no WhatsApp, conforme docs/monitoramento-whatsapp.md. Não usa automações do aplicativo Codex: roda no serviço da loja.
 
 Pedidos com entrega confirmada na consulta recente aparecem uma última vez com ENTREGA CONFIRMADA. Após o servidor aceitar esse resumo, a conclusão é registrada por pedido e destinatário e não volta aos resumos seguintes. O histórico do CRM permanece. Falhas de envio não registram a confirmação; consultas antigas ou com erro continuam visíveis para conferência. O pedido Bling 2 desta loja, confirmado pelo responsável como já apresentado no resumo de 11/10/2026, é registrado como informado aos destinatários cujos envios daquele dia foram aceitos.
 

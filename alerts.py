@@ -108,12 +108,36 @@ class Alerts:
                     for key in completed:
                         db.execute(f'INSERT INTO email_completed_orders VALUES ({self.p},{self.p}) ON CONFLICT DO NOTHING', (recipient, key))
 
+    def monitor_alerts(self, now):
+        monitor = getattr(self.crm, 'monitor', None)
+        if not monitor:
+            return
+        for row in monitor.overdue(now):
+            # One durable claim per waiting episode and recipient; another client
+            # message cannot restart the clock or generate a duplicate alert.
+            job = 'whatsapp-overdue:' + row['episode_key']
+            fmt = lambda value: value.astimezone(ZONE).strftime('%d/%m/%Y às %H:%M')
+            phone = row['latest'].get('contactPhone', '')
+            body = '\n'.join([
+                'Fazendo Fita — prazo de resposta do WhatsApp',
+                'Uma conversa atingiu 1 hora útil sem resposta registrada de atendimento.',
+                'Contato com telefone terminado em ' + phone[-4:] + '.',
+                'Primeira mensagem em espera: ' + fmt(datetime.fromisoformat(row['pending_since'])),
+                'Limite de resposta: ' + fmt(row['deadline']),
+                'Expediente: segunda a sexta, 8h às 18h, horário de São Paulo.',
+                'Confira a conversa antes de agir: mensagens como agradecimentos também podem aparecer como espera.',
+                'https://fazendo-fita-webhook.onrender.com/monitor',
+                'Aviso interno. Nenhuma mensagem foi enviada ao cliente.'
+            ])
+            self.deliver(job, 'Fazendo Fita — WhatsApp aguardando resposta há 1 hora útil', body, now)
+
     def tick(self, now):
         test_id = self.settings.get('EMAIL_TEST_ID', '')
         if test_id:
             self.deliver('test:' + test_id, 'Fazendo Fita — teste dos alertas', 'Este é um teste dos alertas internos da Fazendo Fita.\nDestinatário: um dos três responsáveis configurados.\nNenhuma mensagem foi enviada aos compradores.', now)
         if self.settings.get('EMAIL_ENABLED', '').lower() != 'true':
             return
+        self.monitor_alerts(now)
         local = now.astimezone(ZONE)
         for hour, minute in ((12, 0), (16, 30)):
             due = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -128,6 +152,8 @@ class Alerts:
         scheduled = self.settings.get('EMAIL_ENABLED', '').lower() == 'true'
         label = 'E-mails: resumos às 12h e às 16h30 (Brasília).' if scheduled else 'E-mails: envio de teste; resumos automáticos ainda desativados.'
         labels = {'accepted': 'aceito pelo servidor de envio; conferir recebimento', 'sending': 'tentativa iniciada; conferir recebimento', 'uncertain': 'falha ou resultado incerto; conferir configuração e recebimento'}
+        if getattr(self.crm, 'monitor', None) and scheduled:
+            label += ' WhatsApp: um aviso por espera que atingir 1 hora útil (seg-sex, 8h-18h). Somente acompanhamento; Fiorella ainda desativada.'
         label += ' Entregas e cancelamentos aparecem uma vez e depois ficam fora dos resumos.'
         return label, [' | '.join((job, recipient, labels[state])) for job, recipient, state in rows]
 

@@ -15,6 +15,42 @@ class AlertTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_whatsapp_wait_alert_is_once_per_episode_and_survives_restart(self):
+        from monitor import Monitor
+        monitor = Monitor(self.crm.store, self.fixture.settings)
+        self.crm.monitor = monitor
+        now = datetime(2026, 10, 20, 17, tzinfo=timezone.utc)
+        event = dict(assistantId=monitor.agent, channel='CLOUD_API', messageId='customer-1', contextId='conversation-1', role='user', date='2026-10-20T16:00:00Z', contactName='PRIVATE NAME', contactPhone='5511999991234', message='PRIVATE MESSAGE')
+        monitor.save(event, now)
+        self.alerts.tick(datetime(2026, 10, 20, 16, 59, tzinfo=timezone.utc))
+        self.assertEqual(self.sent, [])
+        self.alerts.tick(now)
+        self.assertEqual(len(self.sent), 3)
+        self.assertIn('1234', self.sent[0][2])
+        self.assertNotIn('PRIVATE NAME', self.sent[0][2])
+        self.assertNotIn('PRIVATE MESSAGE', self.sent[0][2])
+        self.assertNotIn('5511999991234', self.sent[0][2])
+        monitor.save(dict(event, messageId='customer-2', date='2026-10-20T17:00:00Z'), now)
+        restarted = Alerts(self.crm, {'EMAIL_ENABLED': 'true'}, lambda *args: self.sent.append(args))
+        restarted.tick(now)
+        self.assertEqual(len(self.sent), 3)
+        monitor.save(dict(event, messageId='late-earlier-customer', date='2026-10-20T15:59:00Z'), now)
+        restarted.tick(now)
+        self.assertEqual(len(self.sent), 3)
+        monitor.save(dict(event, messageId='human-1', role='assistant', date='2026-10-20T17:01:00Z'), now)
+        restarted.tick(now)
+        self.assertEqual(len(self.sent), 3)
+        monitor.save(dict(event, messageId='customer-3', date='2026-10-20T17:02:00Z'), now)
+        restarted.tick(datetime(2026, 10, 20, 18, 2, tzinfo=timezone.utc))
+        self.assertEqual(len(self.sent), 6)
+
+    def test_whatsapp_alerts_respect_disabled_email_setting(self):
+        from unittest.mock import Mock
+        self.crm.monitor = Mock()
+        self.alerts.settings = {'EMAIL_ENABLED': 'false'}
+        self.alerts.tick(datetime(2026, 10, 20, 17, tzinfo=timezone.utc))
+        self.crm.monitor.overdue.assert_not_called()
+
     def test_daily_slots_local_time_and_restart_dedup(self):
         self.alerts.tick(datetime(2026, 10, 11, 14, 59, tzinfo=timezone.utc))
         self.assertEqual(len(self.sent), 0)

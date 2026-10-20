@@ -122,6 +122,7 @@ def create_app():
     if crm:
         from monitor import Monitor
         app.monitor = Monitor(store, dict(crm.settings, **{k: v for k, v in os.environ.items() if k == 'GPTMAKER_MONITOR_AGENT_ID'}))
+        crm.monitor = app.monitor
         crm.meli = app.meli
     from alerts import configure as configure_alerts
     if crm:
