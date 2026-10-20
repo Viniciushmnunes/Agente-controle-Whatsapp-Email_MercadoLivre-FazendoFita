@@ -46,6 +46,7 @@ class Monitor:
             db.execute('CREATE TABLE IF NOT EXISTS monitor_messages (event_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, occurred_at TEXT NOT NULL, role TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)')
             db.execute('CREATE INDEX IF NOT EXISTS monitor_context_date ON monitor_messages (context_key, occurred_at)')
             db.execute('CREATE TABLE IF NOT EXISTS monitor_automatic_messages (event_key TEXT PRIMARY KEY)')
+            db.execute('CREATE TABLE IF NOT EXISTS monitor_greetings (greeting_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, sent_at TEXT NOT NULL)')
 
     def digest(self, value):
         return hmac.new(self.identity_key, value.encode(), hashlib.sha256).hexdigest()
@@ -92,10 +93,17 @@ class Monitor:
         with self.store.connect() as db:
             db.execute(f'INSERT INTO monitor_automatic_messages VALUES ({self.placeholder}) ON CONFLICT DO NOTHING', (self.digest(self.agent + ':' + message_id),))
 
+    def record_greeting(self, greeting_key, context_id, sent_at):
+        sent_at = datetime.fromisoformat(sent_at).astimezone(timezone.utc).isoformat(timespec='microseconds')
+        p = self.placeholder
+        with self.store.connect() as db:
+            db.execute(f'INSERT INTO monitor_greetings VALUES ({p},{p},{p}) ON CONFLICT DO NOTHING', (greeting_key, self.digest(self.agent + ':' + context_id), sent_at))
+
     def conversations(self, now=None):
         now = now or datetime.now(timezone.utc)
         with self.store.connect() as db:
             events = db.execute("SELECT m.context_key, m.event_key, m.payload, a.event_key FROM monitor_messages m LEFT JOIN monitor_automatic_messages a ON a.event_key=m.event_key ORDER BY m.occurred_at, CASE WHEN m.role='assistant' THEN 0 ELSE 1 END, m.event_key").fetchall()
+            greetings = db.execute('SELECT greeting_key, context_key, sent_at FROM monitor_greetings ORDER BY sent_at').fetchall()
         contexts = {}
         for context, key, encrypted, automatic in events:
             event = json.loads(self.cipher.decrypt(encrypted.encode()))
@@ -117,7 +125,17 @@ class Monitor:
         for row in contexts.values():
             row['deadline'] = business_deadline(datetime.fromisoformat(row['pending_since'])) if row['pending_since'] else None
             row['overdue'] = row['deadline'] is not None and now >= row['deadline']
-        return sorted(contexts.values(), key=lambda r: (not r['overdue'], r['pending_since'] is None, r['pending_since'] or r['latest']['date']))
+            row['critical_at'] = None
+            row['greeting_key'] = None
+            if row['pending_since']:
+                # Only an accepted greeting in the still-unanswered episode counts.
+                candidates = [(key, sent) for key, context, sent in greetings if context == row['key'] and sent >= row['pending_since']]
+                if candidates:
+                    key, sent = candidates[0]
+                    row['critical_at'] = datetime.fromisoformat(sent) + timedelta(hours=24)
+                    row['greeting_key'] = key
+            row['critical'] = row['critical_at'] is not None and now >= row['critical_at']
+        return sorted(contexts.values(), key=lambda r: (not r['critical'], not r['overdue'], r['pending_since'] is None, r['pending_since'] or r['latest']['date']))
 
     def overdue(self, now):
         return [row for row in self.conversations(now) if row['overdue']]
@@ -127,8 +145,10 @@ class Monitor:
         rows = self.conversations(now)
         pending = [r for r in rows if r['pending_since']]
         overdue = [r for r in pending if r['overdue']]
+        critical = [r for r in pending if r['critical']]
         parts = ['<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Conversas — Fazendo Fita</title><style>body{font:16px system-ui;max-width:1200px;margin:32px auto;padding:16px;color:#242038}table{width:100%;border-collapse:collapse}td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd;vertical-align:top}td{overflow-wrap:anywhere;white-space:pre-wrap}a{color:#550982}</style><h1>Conversas do WhatsApp</h1><p><a href="/crm">Pedidos e entregas</a> · <a href="/monitor">Atualizar conversas</a></p>']
         parts.append(f'<p>{len(pending)} conversa(s) aguardando resposta, sendo {len(overdue)} com prazo vencido, em {len(rows)} conversa(s) registradas.</p>')
+        parts.append(f'<p style="color:#b00020;font-weight:bold">🔴 {len(critical)} alarme(s) crítico(s): 24 horas após a saudação da Fiorella sem resposta humana.</p>')
         parts.append('<p>Prazo de resposta humana: 1 hora útil, de segunda a sexta, das 8h às 18h (São Paulo). Novas mensagens do cliente não reiniciam o prazo. A saudação cadastrada da Fiorella não encerra a espera.</p><p>Indicador para revisão: uma mensagem de agradecimento também pode aparecer como espera. Respostas são identificadas pelo fluxo validado com o agente inativo, sem identificar qual pessoa respondeu. Somente eventos encaminhados desde a conexão do n8n; sem histórico anterior. Atualize a página para conferir o prazo.</p>')
         if not rows:
             parts.append('<p>Aguardando o primeiro encaminhamento do n8n.</p>')
@@ -137,10 +157,14 @@ class Monitor:
             for item in rows[:200]:
                 row = item['latest']
                 fmt = lambda date: date.astimezone(ZONE).strftime('%d/%m/%Y %H:%M:%S')
-                status = 'Prazo vencido — revisar atendimento' if item['overdue'] else 'Aguardando resposta — dentro do prazo' if item['pending_since'] else 'Última mensagem de resposta'
+                status = '🔴 CRÍTICO — 24h após a Fiorella sem resposta humana' if item['critical'] else 'Prazo vencido — revisar atendimento' if item['overdue'] else 'Aguardando resposta — dentro do prazo' if item['pending_since'] else 'Última mensagem de resposta'
                 waiting = ('Desde: ' + fmt(datetime.fromisoformat(item['pending_since'])) + '\nLimite: ' + fmt(item['deadline'])) if item['pending_since'] else '—'
+                if item['critical_at']:
+                    waiting += '\nAlarme de 24h: ' + fmt(item['critical_at'])
+                if item['critical']:
+                    status += '\nMensagem de desculpas ainda não configurada.'
                 text = row['message'] or f"[Sem texto; {row['mediaCount']} anexo(s)]"
-                parts.append('<tr>' + ''.join('<td>' + escape(v) + '</td>' for v in (row['contactName'] + '\n' + row['contactPhone'], fmt(datetime.fromisoformat(row['date'])), status, waiting, text[:2000])) + '</tr>')
+                parts.append(('<tr style="background:#fff0f1;color:#9d001b">' if item['critical'] else '<tr>') + ''.join('<td>' + escape(v) + '</td>' for v in (row['contactName'] + '\n' + row['contactPhone'], fmt(datetime.fromisoformat(row['date'])), status, waiting, text[:2000])) + '</tr>')
             parts.append('</table><p>Exibindo até 200 conversas, priorizando os prazos vencidos. Anexos não são baixados.</p>')
         parts.append('<p>Fiorella: teste limitado ao celular do responsável, com a mensagem exata Teste Fiorella. O envio geral aos clientes está desativado. O agente de IA permanece inativo.</p></html>')
         return ''.join(parts)

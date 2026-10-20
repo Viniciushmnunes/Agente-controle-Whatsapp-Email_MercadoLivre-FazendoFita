@@ -52,3 +52,16 @@ Usa POST /v2/chat/{chatId}/send-message somente com o texto fixo aprovado. A res
 A tentativa é registrada antes do POST no banco, uma vez para a conversa de teste (versão v1 do piloto). Resultado incerto não é repetido automaticamente; accepted indica somente aceitação da API. Eventos novos, repetições e reinícios não geram outra saudação nessa conversa. Isso é uma restrição do piloto, não a definição final de abertura de novos atendimentos.
 
 GET /monitor/fiorella exige o login privado e mostra chave presente, modo e estados das tentativas, sem chave ou conteúdo das conversas. GET /monitor/fiorella/probe verifica leitura na API e expõe apenas nomes de campos e indicadores de correspondência, sem enviar mensagens. Nenhuma dessas páginas habilita envio geral. A liberação aos clientes ainda depende de validar entrega, retorno do webhook, preservação do prazo e a regra para uma nova saudação em um novo atendimento.
+
+
+## Escalada crítica de 24 horas — solicitada em 20/10/2026
+
+Além do prazo de uma hora útil, o responsável solicitou sinal vermelho e uma mensagem de desculpas 24 horas após a saudação da Fiorella, se não houver resposta humana, mesmo sem nova mensagem do cliente. Essas 24 horas são corridas, inclusive à noite e no fim de semana. Não há repetição diária autorizada: um único aviso crítico por saudação ainda sem resposta humana.
+
+O registro monitor_greetings guarda a aceitação da saudação pela API, contexto derivado por HMAC e horário. É reconstruído para o piloto já aceito em reinícios. O painel marca em vermelho quando chega a sent_at + 24h e não há resposta de atendimento posterior; novas mensagens do cliente não adiam esse prazo. Uma resposta humana encerra a espera e remove o sinal vermelho. Uma espera nova depois dessa resposta não herda a saudação antiga. O aviso crítico por e-mail usa o mesmo controle persistente de tentativas por destinatário, separado do aviso de uma hora útil e dos resumos de pedidos. Não depende de uma nova mensagem para disparar.
+
+72 testes locais passaram, incluindo limite exato de 24h, reinício, ausência de saudação aceita, resposta humana, mensagem posterior do cliente e aviso crítico em sábado antes do próximo expediente. Não foi gerado alarme artificial no banco real.
+
+A mensagem ao cliente após 24h continua NÃO IMPLEMENTADA/NÃO ATIVADA. A política oficial do WhatsApp estabelece a janela de 24h a partir da última mensagem do cliente, renovada apenas por mensagem dele; fora dela exige modelo aprovado. Como a saudação normalmente vem depois da mensagem inicial, esperar 24h desde a saudação sem nova mensagem do cliente já excede a janela. O endpoint de texto simples usado no piloto não atende esse caso. É necessário cadastrar/aprovar o modelo e confirmar o recurso de envio de modelos pela API/automação do GPT Maker. O alarme deve funcionar mesmo quando o envio ao cliente estiver pendente ou falhar; o painel informa que a mensagem de desculpas não está configurada.
+
+Fonte consultada em 20/10/2026: https://whatsappbusiness.com/policy/ (seção 2). A saudação inicial geral ainda está desativada; apenas o piloto do responsável está liberado.

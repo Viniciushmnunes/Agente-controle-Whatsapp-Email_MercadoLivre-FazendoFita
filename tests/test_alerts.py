@@ -51,6 +51,22 @@ class AlertTests(unittest.TestCase):
         self.alerts.tick(datetime(2026, 10, 20, 17, tzinfo=timezone.utc))
         self.crm.monitor.overdue.assert_not_called()
 
+    def test_red_alarm_sends_once_even_outside_business_hours(self):
+        from monitor import Monitor
+        monitor = Monitor(self.crm.store, self.fixture.settings)
+        self.crm.monitor = monitor
+        friday = datetime(2026, 10, 23, 22, tzinfo=timezone.utc)
+        event = dict(assistantId=monitor.agent, channel='CLOUD_API', messageId='m1', contextId='c1', role='user', date=friday.isoformat(), message='Hello')
+        monitor.save(event, friday)
+        monitor.record_greeting('g1', 'c1', friday.isoformat())
+        saturday = datetime(2026, 10, 24, 22, tzinfo=timezone.utc)
+        self.alerts.tick(saturday)
+        self.alerts.tick(saturday)
+        restarted = Alerts(self.crm, {'EMAIL_ENABLED': 'true'}, lambda *args: self.sent.append(args))
+        restarted.tick(saturday)
+        self.assertEqual(len(self.sent), 3)
+        self.assertTrue(all('ALARME VERMELHO' in msg[1] for msg in self.sent))
+
     def test_daily_slots_local_time_and_restart_dedup(self):
         self.alerts.tick(datetime(2026, 10, 11, 14, 59, tzinfo=timezone.utc))
         self.assertEqual(len(self.sent), 0)

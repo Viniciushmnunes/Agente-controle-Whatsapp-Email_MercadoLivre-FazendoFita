@@ -130,6 +130,19 @@ class Alerts:
                 'Aviso interno. Nenhuma mensagem foi enviada ao cliente.'
             ])
             self.deliver(job, 'Fazendo Fita — WhatsApp aguardando resposta há 1 hora útil', body, now)
+        for row in monitor.conversations(now):
+            if not row['critical']:
+                continue
+            body = '\n'.join([
+                'ALARME VERMELHO — atendimento humano ainda sem resposta registrada.',
+                'Passaram 24 horas corridas desde a saudação da Fiorella.',
+                'Contato com telefone terminado em ' + row['latest'].get('contactPhone', '')[-4:] + '.',
+                'A resposta humana precisa de atenção prioritária.',
+                'A mensagem automática de desculpas ainda não está configurada; fora da janela do WhatsApp é necessário um modelo aprovado.',
+                'Confira a conversa: https://fazendo-fita-webhook.onrender.com/monitor',
+                'Aviso interno. A saudação automática não encerra a espera.'
+            ])
+            self.deliver('whatsapp-critical24:' + row['greeting_key'], 'Fazendo Fita — ALARME VERMELHO: 24h sem resposta humana', body, now)
 
     def tick(self, now):
         test_id = self.settings.get('EMAIL_TEST_ID', '')

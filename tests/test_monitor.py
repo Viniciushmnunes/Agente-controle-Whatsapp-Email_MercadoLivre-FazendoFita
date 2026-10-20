@@ -147,3 +147,22 @@ class MonitorTests(unittest.TestCase):
         # Incoming arbitrary flags cannot suppress a real reply in this schema.
         self.monitor.save(self.event(messageId='human', role='assistant', automatic=True, date='2026-10-20T17:00:00Z'), self.now)
         self.assertIsNone(self.monitor.conversations(self.now)[0]['pending_since'])
+
+    def test_red_alarm_24_hours_from_greeting_not_new_customer_messages(self):
+        self.monitor.save(self.event(), self.now)
+        self.monitor.record_greeting('greeting-1', 'c1', '2026-10-20T16:01:00Z')
+        self.monitor.save(self.event(messageId='next', date='2026-10-20T17:00:00Z'), self.now)
+        before = datetime(2026, 10, 21, 16, 0, 59, tzinfo=timezone.utc)
+        due = datetime(2026, 10, 21, 16, 1, tzinfo=timezone.utc)
+        self.assertFalse(self.monitor.conversations(before)[0]['critical'])
+        self.assertTrue(self.monitor.conversations(due)[0]['critical'])
+        restarted = Monitor(self.store, self.settings)
+        self.assertTrue(restarted.conversations(due)[0]['critical'])
+        self.monitor.save(self.event(messageId='human', role='assistant', date='2026-10-21T16:02:00Z'), due)
+        self.assertFalse(self.monitor.conversations(due)[0]['critical'])
+        self.monitor.save(self.event(messageId='next-episode', date='2026-10-21T16:03:00Z'), due)
+        self.assertIsNone(self.monitor.conversations(due)[0]['critical_at'])
+
+    def test_no_red_alarm_without_accepted_greeting(self):
+        self.monitor.save(self.event(), self.now)
+        self.assertFalse(self.monitor.conversations(datetime(2026, 10, 24, tzinfo=timezone.utc))[0]['critical'])

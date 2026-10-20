@@ -29,6 +29,11 @@ class Fiorella:
         self.p = monitor.placeholder
         with monitor.store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS fiorella_pilot (job TEXT PRIMARY KEY, state TEXT NOT NULL, updated TEXT NOT NULL)')
+            accepted = dict(db.execute("SELECT job, updated FROM fiorella_pilot WHERE state='accepted'").fetchall())
+        for row in monitor.latest():
+            job = monitor.digest('fiorella-pilot-v1:' + row['contextId'])
+            if job in accepted:
+                monitor.record_greeting(job, row['contextId'], accepted[job])
 
     def request(self, method, path, body=None):
         # URL and payload are built here; caller cannot supply another host.
@@ -125,6 +130,7 @@ class Fiorella:
             result = self.transport('POST', '/chat/' + self.segment(chat['id']) + '/send-message', {'message': FIORELLA_GREETING})
             if isinstance(result, dict) and result.get('success') is True:
                 state = 'accepted'
+                self.monitor.record_greeting(job, chat['id'], now.isoformat())
                 # The documented send response has no message ID. Reconcile using
                 # canonical history; the exact greeting also keeps the clock running.
                 try:
