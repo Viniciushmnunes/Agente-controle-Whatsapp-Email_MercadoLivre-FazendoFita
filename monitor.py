@@ -187,9 +187,9 @@ class Monitor:
         if not hmac.compare_digest(environ.get('HTTP_AUTHORIZATION', '').encode(), expected.encode()):
             return respond('401 Unauthorized', 'Acesso privado')
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
-        if path in ('/monitor/meta', '/monitor/meta/probe') and method == 'GET':
+        if path in ('/monitor/meta', '/monitor/meta/probe', '/monitor/meta/delivery') and method == 'GET':
             meta = getattr(self.fiorella, 'meta', None)
-            result = meta.probe() if meta and path.endswith('/probe') else meta.status() if meta else {'configured': False}
+            result = meta.delivery_probe() if meta and path.endswith('/delivery') else meta.probe() if meta and path.endswith('/probe') else meta.status() if meta else {'configured': False}
             return respond('200 OK', json.dumps(result))
         if path in ('/monitor/fiorella', '/monitor/fiorella/probe') and method == 'GET':
             if not self.fiorella:

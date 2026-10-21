@@ -57,7 +57,7 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
-        if self.monitor and path in ('/monitor', '/monitor/events', '/monitor/fiorella', '/monitor/fiorella/probe', '/monitor/meta', '/monitor/meta/probe'):
+        if self.monitor and path in ('/monitor', '/monitor/events', '/monitor/fiorella', '/monitor/fiorella/probe', '/monitor/meta', '/monitor/meta/probe', '/monitor/meta/delivery'):
             return self.monitor.handle(environ, start_response)
         if self.meli and path in ('/meli/connect', '/meli/callback', '/meli/notifications'):
             return self.meli.handle(environ, start_response)

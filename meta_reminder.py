@@ -113,3 +113,38 @@ class MetaReminder:
         with self.monitor.store.connect() as db:
             states = [r[0] for r in db.execute('SELECT state FROM meta_reminder_attempts').fetchall()]
         return {'configured': self.configured(), 'mode': 'owner-only test', 'attempts': states}
+
+    def delivery_probe(self):
+        """Read-only correlation; no claim of delivery without a delivery webhook."""
+        sender = self.monitor.fiorella
+        with self.monitor.store.connect() as db:
+            attempts = db.execute('SELECT state, updated, message_id FROM meta_reminder_attempts').fetchall()
+        ids = {self.monitor.cipher.decrypt(row[2].encode()).decode() for row in attempts if row[2]}
+        result = {'attempts': [{'state': row[0], 'at': row[1]} for row in attempts], 'delivery_confirmed': False}
+        try:
+            chat = sender.test_chat()
+            messages = sender.read_list('/chat/' + sender.segment(chat['id']) + '/messages')
+            matches = [m for m in messages if m.get('id') in ids or m.get('externalId') in ids]
+            result['provider_history_matches'] = len(matches)
+            result['provider_history_has_error'] = any(m.get('hasError') is True for m in matches)
+            # Only known status enum values and numeric codes may leave this probe.
+            states, codes = set(), set()
+            def inspect(value):
+                if isinstance(value, dict):
+                    for key, item in value.items():
+                        if key in ('code', 'error_code') and isinstance(item, int):
+                            codes.add(item)
+                        if key in ('status', 'message_status') and isinstance(item, str) and item in ('sent', 'delivered', 'read', 'failed', 'held_for_quality_assessment', 'accepted'):
+                            states.add(item)
+                        inspect(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        inspect(item)
+            for message in matches:
+                inspect(message.get('metadata'))
+            result['provider_statuses'] = sorted(states)
+            result['provider_error_codes'] = sorted(codes)
+            result['delivery_confirmed'] = bool(states & {'delivered', 'read'})
+        except ProviderError as error:
+            result['history_check'] = str(error)
+        return result

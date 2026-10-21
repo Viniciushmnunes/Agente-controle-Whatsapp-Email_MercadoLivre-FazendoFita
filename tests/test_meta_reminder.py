@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock
 from cryptography.fernet import Fernet
 from app import Store
 from monitor import Monitor
@@ -86,3 +87,28 @@ class MetaReminderTests(unittest.TestCase):
         self.settings['WHATSAPP_PHONE_NUMBER_ID'] = 'other'
         self.assertFalse(self.meta.probe()['ready'])
         self.assertEqual(self.calls, [])
+
+    def test_delivery_probe_separates_acceptance_and_delivery_without_resending(self):
+        self.meta.send_test(self.event, self.now)
+        sender = Mock()
+        sender.test_chat.return_value = {'id': 'chat-1'}
+        sender.segment.return_value = 'chat-1'
+        sender.read_list.return_value = [{'id': 'internal-id', 'externalId': 'wamid.test', 'hasError': True, 'metadata': {'status': 'failed', 'error': {'code': 131042, 'message': 'private provider text'}}}]
+        self.monitor.fiorella = sender
+        result = self.meta.delivery_probe()
+        self.assertEqual(result['provider_history_matches'], 1)
+        self.assertEqual(result['provider_error_codes'], [131042])
+        self.assertFalse(result['delivery_confirmed'])
+        self.assertNotIn('private provider text', str(result))
+        self.assertNotIn('wamid.test', str(result))
+        self.assertEqual(sum(c[0] == 'POST' for c in self.calls), 1)
+        sender.read_list.return_value[0]['metadata'] = {'status': 'delivered'}
+        self.assertTrue(self.meta.delivery_probe()['delivery_confirmed'])
+
+    def test_missing_provider_history_does_not_prove_delivery(self):
+        sender = Mock()
+        sender.test_chat.return_value = {'id': 'chat-1'}
+        sender.segment.return_value = 'chat-1'
+        sender.read_list.return_value = []
+        self.monitor.fiorella = sender
+        self.assertFalse(self.meta.delivery_probe()['delivery_confirmed'])
