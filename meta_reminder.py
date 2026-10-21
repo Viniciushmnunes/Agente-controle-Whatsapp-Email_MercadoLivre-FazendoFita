@@ -112,7 +112,7 @@ class MetaReminder:
     def status(self):
         with self.monitor.store.connect() as db:
             states = [r[0] for r in db.execute('SELECT state FROM meta_reminder_attempts').fetchall()]
-        return {'configured': self.configured(), 'mode': 'owner-only test', 'attempts': states}
+        return {'configured': self.configured(), 'mode': 'owner-only test', 'test_trigger': TEST_TRIGGER, 'attempts': states}
 
     def delivery_probe(self):
         """Read-only correlation; no claim of delivery without a delivery webhook."""
