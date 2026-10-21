@@ -65,3 +65,16 @@ O registro monitor_greetings guarda a aceitação da saudação pela API, contex
 A mensagem ao cliente após 24h continua NÃO IMPLEMENTADA/NÃO ATIVADA. A política oficial do WhatsApp estabelece a janela de 24h a partir da última mensagem do cliente, renovada apenas por mensagem dele; fora dela exige modelo aprovado. Como a saudação normalmente vem depois da mensagem inicial, esperar 24h desde a saudação sem nova mensagem do cliente já excede a janela. O endpoint de texto simples usado no piloto não atende esse caso. É necessário cadastrar/aprovar o modelo e confirmar o recurso de envio de modelos pela API/automação do GPT Maker. O alarme deve funcionar mesmo quando o envio ao cliente estiver pendente ou falhar; o painel informa que a mensagem de desculpas não está configurada.
 
 Fonte consultada em 20/10/2026: https://whatsappbusiness.com/policy/ (seção 2). A saudação inicial geral ainda está desativada; apenas o piloto do responsável está liberado.
+
+
+## Modelo aprovado e API direta da Meta — 21/10/2026
+
+O responsável apresentou o modelo fiorella_atendimento_pendente_24h ativo, pt_BR, categoria Utilidade. O suporte Bruno confirmou que a API GPT Maker não envia templates, orientando usar a API oficial com as credenciais disponíveis no canal. O responsável salvou WHATSAPP_BUSINESS_ACCOUNT_ID, WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN no Render. O número remetente permanece o canal comercial 3209, não o canal separado 5205.
+
+meta_reminder.py consulta /v22.0/{waba}/message_templates e confirma nome exato, APPROVED, UTILITY, pt_BR, somente BODY sem variáveis. A consulta /phone_numbers confirma que o ID configurado pertence à conta esperada. Não registra token em logs nem retorna corpo de erro da Meta. A API é usada com Bearer em cabeçalho, redirecionamentos bloqueados e tamanho/tempo de resposta limitados.
+
+O piloto de envio do modelo é limitado ao telefone do responsável e requer nova mensagem exata `Teste lembrete Fiorella`. Fiorella valida essa mensagem na API do GPT Maker (contexto, telefone, ID, texto, papel e horário) antes de chamar o envio Meta. O payload envia type=template, name=fiorella_atendimento_pendente_24h, language.code=pt_BR, sem componentes dinâmicos. A tentativa é gravada antes do POST e repetição/reinício não reenvia. accepted significa ID wamid retornado pela API, não entrega confirmada. Esse ID fica cifrado no banco. Respostas automáticas com o corpo exato aprovado são reconhecidas por resumo HMAC do texto, pois o webhook GPT Maker pode atribuir outro ID à mensagem.
+
+GET /monitor/meta/probe é privado e verifica credenciais/modelo sem enviar mensagens; /monitor/meta mostra os estados das tentativas sem segredos. O teste pode enviar a mensagem imediatamente ao responsável para validar o caminho de entrega; não reduz o prazo real de 24 horas. O disparo temporizado e a liberação geral aos clientes ainda estão desativados e dependem de validar a chegada do modelo no piloto. O sinal vermelho e os e-mails internos permanecem independentes.
+
+78 testes passaram, incluindo aprovação/categoria/idioma, conta incorreta, destinatário restrito, duplicatas, reinícios, resposta incerta e eco do template preservando a espera.

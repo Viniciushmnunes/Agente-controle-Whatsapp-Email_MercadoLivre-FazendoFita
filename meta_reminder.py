@@ -1,0 +1,115 @@
+"""Approved Meta template, owner-only validation before customer rollout."""
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from fiorella import NoRedirect, ProviderError, TEST_PHONE
+
+TEMPLATE_NAME = 'fiorella_atendimento_pendente_24h'
+TEST_TRIGGER = 'Teste lembrete Fiorella'
+EXPECTED_WABA = '1607356107416841'
+EXPECTED_PHONE_ID = '1317182464806320'
+
+
+class MetaReminder:
+    def __init__(self, monitor, settings, transport=None):
+        self.monitor = monitor
+        self.settings = settings
+        self.transport = transport or self.request
+        self.p = monitor.placeholder
+        with monitor.store.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS meta_reminder_attempts (job TEXT PRIMARY KEY, state TEXT NOT NULL, updated TEXT NOT NULL, message_id TEXT NOT NULL)')
+
+    def configured(self):
+        return (bool(self.settings.get('WHATSAPP_ACCESS_TOKEN')) and
+            self.settings.get('WHATSAPP_BUSINESS_ACCOUNT_ID') == EXPECTED_WABA and
+            self.settings.get('WHATSAPP_PHONE_NUMBER_ID') == EXPECTED_PHONE_ID)
+
+    def request(self, method, path, body=None):
+        req = urllib.request.Request('https://graph.facebook.com/v22.0/' + path, method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={'Authorization': 'Bearer ' + self.settings['WHATSAPP_ACCESS_TOKEN'], 'Content-Type': 'application/json'})
+        try:
+            with urllib.request.build_opener(NoRedirect).open(req, timeout=8) as response:
+                raw = response.read(1024 * 1024 + 1)
+                if len(raw) > 1024 * 1024:
+                    raise ProviderError('Meta response too large')
+                return json.loads(raw)
+        except urllib.error.HTTPError as error:
+            # Numeric error codes are safe; never expose response bodies or tokens.
+            code = None
+            try:
+                data = json.loads(error.read(16384))
+                code = data.get('error', {}).get('code')
+            except (ValueError, AttributeError):
+                pass
+            suffix = ' code ' + str(code) if isinstance(code, int) else ''
+            raise ProviderError('Meta HTTP ' + str(error.code) + suffix) from None
+        except (OSError, ValueError):
+            raise ProviderError('Meta unavailable') from None
+
+    def approved_template(self):
+        if not self.configured():
+            raise ProviderError('Meta credentials missing or account mismatch')
+        query = urllib.parse.urlencode({'name': TEMPLATE_NAME, 'fields': 'id,name,status,language,category,components', 'limit': 100})
+        data = self.transport('GET', EXPECTED_WABA + '/message_templates?' + query)
+        rows = data.get('data') if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise ProviderError('unexpected Meta template schema')
+        matches = [r for r in rows if isinstance(r, dict) and r.get('name') == TEMPLATE_NAME and r.get('language') == 'pt_BR']
+        if len(matches) != 1 or matches[0].get('status') != 'APPROVED' or matches[0].get('category') != 'UTILITY':
+            raise ProviderError('approved utility template not available')
+        template = matches[0]
+        components = template.get('components')
+        if not isinstance(components, list) or len(components) != 1 or components[0].get('type') != 'BODY':
+            raise ProviderError('template has unexpected components')
+        text = components[0].get('text')
+        if not isinstance(text, str) or not text or '{{' in text:
+            raise ProviderError('template requires parameters or body is missing')
+        # A copied template is never evidence of a human response.
+        self.monitor.register_automatic_text(text)
+        return template
+
+    def probe(self):
+        try:
+            template = self.approved_template()
+            phones = self.transport('GET', EXPECTED_WABA + '/phone_numbers?fields=id,display_phone_number')
+            entries = phones.get('data', []) if isinstance(phones, dict) else []
+            if not any(row.get('id') == EXPECTED_PHONE_ID for row in entries):
+                raise ProviderError('configured phone not found in this account')
+            return {'ready': True, 'template': template['name'], 'language': template['language'], 'status': template['status'], 'category': template['category'], 'mode': 'owner-only test; customer rollout disabled'}
+        except ProviderError as error:
+            return {'ready': False, 'status': str(error)}
+
+    def send_test(self, event, now):
+        # This is called only after Fiorella verifies the fresh incoming trigger in
+        # canonical GPT Maker history. Keep recipient and text non-configurable.
+        if event.get('contactPhone') != TEST_PHONE or event.get('message', '').strip() != TEST_TRIGGER:
+            return 'not eligible'
+        template = self.approved_template()
+        job = self.monitor.digest('meta-reminder-owner-test-v1:' + event['contextId'])
+        with self.monitor.store.connect() as db:
+            claimed = db.execute(f'INSERT INTO meta_reminder_attempts VALUES ({self.p},{self.p},{self.p},{self.p}) ON CONFLICT DO NOTHING RETURNING job', (job, 'sending', now.isoformat(), '')).fetchone()
+        if not claimed:
+            return 'already attempted'
+        state, message_id = 'uncertain', ''
+        try:
+            result = self.transport('POST', EXPECTED_PHONE_ID + '/messages', {
+                'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': TEST_PHONE, 'type': 'template',
+                'template': {'name': TEMPLATE_NAME, 'language': {'code': 'pt_BR'}}})
+            messages = result.get('messages', []) if isinstance(result, dict) else []
+            if len(messages) == 1 and isinstance(messages[0].get('id'), str) and messages[0]['id'].startswith('wamid.'):
+                state, message_id = 'accepted', messages[0]['id']
+                self.monitor.mark_automatic(message_id)
+        finally:
+            # Provider IDs are encrypted; never log conversation data or tokens.
+            encrypted = self.monitor.cipher.encrypt(message_id.encode()).decode() if message_id else ''
+            with self.monitor.store.connect() as db:
+                db.execute(f'UPDATE meta_reminder_attempts SET state={self.p},updated={self.p},message_id={self.p} WHERE job={self.p}', (state, now.isoformat(), encrypted, job))
+        return state
+
+    def status(self):
+        with self.monitor.store.connect() as db:
+            states = [r[0] for r in db.execute('SELECT state FROM meta_reminder_attempts').fetchall()]
+        return {'configured': self.configured(), 'mode': 'owner-only test', 'attempts': states}

@@ -10,6 +10,7 @@ from monitor import FIORELLA_GREETING
 
 TEST_PHONE = '553197118070'
 TEST_TRIGGER = 'Teste Fiorella'
+REMINDER_TRIGGER = 'Teste lembrete Fiorella'
 
 
 class ProviderError(Exception):
@@ -23,6 +24,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class Fiorella:
     def __init__(self, monitor, token, transport=None):
+        self.meta = None
         self.monitor, self.token = monitor, token
         self.diagnostics = {}
         self.transport = transport or self.request
@@ -101,7 +103,8 @@ class Fiorella:
 
     def maybe_send(self, event, now=None):
         now = now or datetime.now(timezone.utc)
-        if not self.token or event.get('role') != 'user' or event.get('contactPhone') != TEST_PHONE or event.get('message', '').strip() != TEST_TRIGGER:
+        trigger = event.get('message', '').strip()
+        if not self.token or event.get('role') != 'user' or event.get('contactPhone') != TEST_PHONE or trigger not in (TEST_TRIGGER, REMINDER_TRIGGER):
             return 'not eligible'
         age = (now - datetime.fromisoformat(event['date'].replace('Z', '+00:00'))).total_seconds()
         if not 0 <= age <= 300:
@@ -110,7 +113,7 @@ class Fiorella:
         if event.get('contextId') != chat['id']:
             raise ProviderError('context mismatch')
         messages = self.read_list('/chat/' + self.segment(chat['id']) + '/messages')
-        canonical = [m for m in messages if m.get('id') == event.get('messageId') and m.get('role') == 'user' and m.get('text', '').strip() == TEST_TRIGGER]
+        canonical = [m for m in messages if m.get('id') == event.get('messageId') and m.get('role') == 'user' and m.get('text', '').strip() == trigger]
         if len(canonical) != 1:
             raise ProviderError('incoming message not verified')
         # Verify freshness from provider, not just the public incoming webhook.
@@ -120,6 +123,8 @@ class Fiorella:
         timestamp = timestamp / 1000 if timestamp > 100000000000 else timestamp
         if not 0 <= now.timestamp() - timestamp <= 300:
             raise ProviderError('provider message not recent')
+        if trigger == REMINDER_TRIGGER:
+            return self.meta.send_test(event, now) if self.meta else 'Meta not configured'
         job = self.monitor.digest('fiorella-pilot-v1:' + chat['id'])
         with self.monitor.store.connect() as db:
             claimed = db.execute(f'INSERT INTO fiorella_pilot VALUES ({self.p},{self.p},{self.p}) ON CONFLICT DO NOTHING RETURNING job', (job, 'sending', now.isoformat())).fetchone()

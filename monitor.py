@@ -46,6 +46,7 @@ class Monitor:
             db.execute('CREATE TABLE IF NOT EXISTS monitor_messages (event_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, occurred_at TEXT NOT NULL, role TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)')
             db.execute('CREATE INDEX IF NOT EXISTS monitor_context_date ON monitor_messages (context_key, occurred_at)')
             db.execute('CREATE TABLE IF NOT EXISTS monitor_automatic_messages (event_key TEXT PRIMARY KEY)')
+            db.execute('CREATE TABLE IF NOT EXISTS monitor_automatic_texts (text_key TEXT PRIMARY KEY)')
             db.execute('CREATE TABLE IF NOT EXISTS monitor_greetings (greeting_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, sent_at TEXT NOT NULL)')
 
     def digest(self, value):
@@ -93,6 +94,10 @@ class Monitor:
         with self.store.connect() as db:
             db.execute(f'INSERT INTO monitor_automatic_messages VALUES ({self.placeholder}) ON CONFLICT DO NOTHING', (self.digest(self.agent + ':' + message_id),))
 
+    def register_automatic_text(self, text):
+        with self.store.connect() as db:
+            db.execute(f'INSERT INTO monitor_automatic_texts VALUES ({self.placeholder}) ON CONFLICT DO NOTHING', (self.digest(text.strip()),))
+
     def record_greeting(self, greeting_key, context_id, sent_at):
         sent_at = datetime.fromisoformat(sent_at).astimezone(timezone.utc).isoformat(timespec='microseconds')
         p = self.placeholder
@@ -104,6 +109,7 @@ class Monitor:
         with self.store.connect() as db:
             events = db.execute("SELECT m.context_key, m.event_key, m.payload, a.event_key FROM monitor_messages m LEFT JOIN monitor_automatic_messages a ON a.event_key=m.event_key ORDER BY m.occurred_at, CASE WHEN m.role='assistant' THEN 0 ELSE 1 END, m.event_key").fetchall()
             greetings = db.execute('SELECT greeting_key, context_key, sent_at FROM monitor_greetings ORDER BY sent_at').fetchall()
+            automatic_texts = {r[0] for r in db.execute('SELECT text_key FROM monitor_automatic_texts').fetchall()}
         contexts = {}
         for context, key, encrypted, automatic in events:
             event = json.loads(self.cipher.decrypt(encrypted.encode()))
@@ -111,7 +117,7 @@ class Monitor:
             row['latest'] = event
             # Temporary fail-safe: a greeting copied manually is also kept for review.
             # Exact text is not accepted as evidence of a human reply.
-            greeting = event['message'].strip() == FIORELLA_GREETING
+            greeting = event['message'].strip() == FIORELLA_GREETING or self.digest(event['message'].strip()) in automatic_texts
             if event['role'] == 'user':
                 if row['pending_since'] is None:
                     row['pending_since'] = event['date']
@@ -181,6 +187,10 @@ class Monitor:
         if not hmac.compare_digest(environ.get('HTTP_AUTHORIZATION', '').encode(), expected.encode()):
             return respond('401 Unauthorized', 'Acesso privado')
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if path in ('/monitor/meta', '/monitor/meta/probe') and method == 'GET':
+            meta = getattr(self.fiorella, 'meta', None)
+            result = meta.probe() if meta and path.endswith('/probe') else meta.status() if meta else {'configured': False}
+            return respond('200 OK', json.dumps(result))
         if path in ('/monitor/fiorella', '/monitor/fiorella/probe') and method == 'GET':
             if not self.fiorella:
                 return respond('200 OK', json.dumps({'key_configured': False}))
