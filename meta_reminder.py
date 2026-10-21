@@ -7,7 +7,7 @@ import urllib.request
 from fiorella import NoRedirect, ProviderError, TEST_PHONE
 
 TEMPLATE_NAME = 'fiorella_atendimento_pendente_24h'
-TEST_TRIGGER = 'Teste lembrete Fiorella'
+TEST_TRIGGER = 'Teste lembrete Fiorella 2'
 EXPECTED_WABA = '1607356107416841'
 EXPECTED_PHONE_ID = '1317182464806320'
 
@@ -88,7 +88,7 @@ class MetaReminder:
         if event.get('contactPhone') != TEST_PHONE or event.get('message', '').strip() != TEST_TRIGGER:
             return 'not eligible'
         template = self.approved_template()
-        job = self.monitor.digest('meta-reminder-owner-test-v1:' + event['contextId'])
+        job = self.monitor.digest('meta-reminder-owner-test-v2:' + event['contextId'])
         with self.monitor.store.connect() as db:
             claimed = db.execute(f'INSERT INTO meta_reminder_attempts VALUES ({self.p},{self.p},{self.p},{self.p}) ON CONFLICT DO NOTHING RETURNING job', (job, 'sending', now.isoformat(), '')).fetchone()
         if not claimed:

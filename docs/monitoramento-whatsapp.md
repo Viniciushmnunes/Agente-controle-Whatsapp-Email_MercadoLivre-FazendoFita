@@ -78,3 +78,10 @@ O piloto de envio do modelo é limitado ao telefone do responsável e requer nov
 GET /monitor/meta/probe é privado e verifica credenciais/modelo sem enviar mensagens; /monitor/meta mostra os estados das tentativas sem segredos. O teste pode enviar a mensagem imediatamente ao responsável para validar o caminho de entrega; não reduz o prazo real de 24 horas. O disparo temporizado e a liberação geral aos clientes ainda estão desativados e dependem de validar a chegada do modelo no piloto. O sinal vermelho e os e-mails internos permanecem independentes.
 
 78 testes passaram, incluindo aprovação/categoria/idioma, conta incorreta, destinatário restrito, duplicatas, reinícios, resposta incerta e eco do template preservando a espera.
+
+
+## Nova tentativa após cadastro de pagamento — 21/10/2026
+
+A tentativa v1 foi aceita pela API em 21/10/2026 às 16h56, sem entrega recebida pelo responsável. O suporte GPT Maker confirmou falha de entrega sem código disponível. O responsável apresentou a conta de mensagens WABA 1607356107416841 com Nenhuma forma de pagamento e informou ter cadastrado o cartão. Isso é uma hipótese compatível, não uma confirmação do código da falha.
+
+Para validar depois dessa alteração, foi criada uma tentativa v2 restrita ao mesmo destinatário de teste e ao mesmo modelo aprovado. O gatilho agora é exatamente `Teste lembrete Fiorella 2`. O antigo texto não dispara a nova tentativa, evitando que a repetição de eventos anteriores faça um reenvio. O registro v1 foi preservado. Uma nova mensagem precisa ser confirmada na API do GPT Maker antes de permitir v2, uma única vez. O envio geral e o disparo temporizado do modelo continuam desativados.
