@@ -10,7 +10,7 @@ from monitor import FIORELLA_GREETING
 
 TEST_PHONE = '553197118070'
 TEST_TRIGGER = 'Teste Fiorella'
-REMINDER_TRIGGER = 'Teste lembrete Fiorella 2'
+REMINDER_TRIGGER = 'Teste lembrete Fiorella 3'
 
 
 class ProviderError(Exception):

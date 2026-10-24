@@ -85,3 +85,14 @@ GET /monitor/meta/probe é privado e verifica credenciais/modelo sem enviar mens
 A tentativa v1 foi aceita pela API em 21/10/2026 às 16h56, sem entrega recebida pelo responsável. O suporte GPT Maker confirmou falha de entrega sem código disponível. O responsável apresentou a conta de mensagens WABA 1607356107416841 com Nenhuma forma de pagamento e informou ter cadastrado o cartão. Isso é uma hipótese compatível, não uma confirmação do código da falha.
 
 Para validar depois dessa alteração, foi criada uma tentativa v2 restrita ao mesmo destinatário de teste e ao mesmo modelo aprovado. O gatilho agora é exatamente `Teste lembrete Fiorella 2`. O antigo texto não dispara a nova tentativa, evitando que a repetição de eventos anteriores faça um reenvio. O registro v1 foi preservado. Uma nova mensagem precisa ser confirmada na API do GPT Maker antes de permitir v2, uma única vez. O envio geral e o disparo temporizado do modelo continuam desativados.
+
+
+## Diagnóstico da tentativa v3 — 24/10/2026
+
+O responsável confirmou entrega do mesmo modelo pelo chat do GPT Maker em 22/10, mas os dois envios diretos da Meta de 21/10 permanecem sem confirmação. O fluxo Ajuda da Meta levou a Relatar problema/Dar feedback; não houve protocolo nem confirmação nos e-mails consultados. Não há chamado técnico confirmado.
+
+Foi preparado novo teste, ainda restrito ao responsável, com a frase exata `Teste lembrete Fiorella 3`. Não é enviado por publicação, consulta ou reinício: exige uma nova mensagem do responsável validada no histórico GPT Maker. Os registros v1/v2 não são apagados e seus eventos não disparam v3.
+
+Antes de interpretar o retorno da Meta, os campos contacts e messages da resposta são cifrados e armazenados em meta_reminder_responses. O diagnóstico privado expõe somente comprimentos dos números, indicação de correspondência do wa_id e estados iniciais conhecidos, sem IDs nem telefones completos. Compara também os campos recipient e whatsappPhone do chat canônico com o destino do teste. held_for_quality_assessment não é tratado como confirmação de entrega. Os campos não guardados em tentativas antigas não podem ser recuperados retroativamente; a ausência de registros antigos é mostrada como ausência, não como prova de sucesso ou falha.
+
+81 testes passaram. A mudança melhora o diagnóstico de um possível novo envio, não confirma a causa das falhas nem a solução. Não altera o destinatário, o modelo, a conta remetente ou os webhooks Meta/GPT Maker, e não habilita envio geral ou temporizado.

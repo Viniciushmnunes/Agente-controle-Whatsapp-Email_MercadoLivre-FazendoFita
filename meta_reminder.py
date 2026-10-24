@@ -7,7 +7,7 @@ import urllib.request
 from fiorella import NoRedirect, ProviderError, TEST_PHONE
 
 TEMPLATE_NAME = 'fiorella_atendimento_pendente_24h'
-TEST_TRIGGER = 'Teste lembrete Fiorella 2'
+TEST_TRIGGER = 'Teste lembrete Fiorella 3'
 EXPECTED_WABA = '1607356107416841'
 EXPECTED_PHONE_ID = '1317182464806320'
 
@@ -20,6 +20,7 @@ class MetaReminder:
         self.p = monitor.placeholder
         with monitor.store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS meta_reminder_attempts (job TEXT PRIMARY KEY, state TEXT NOT NULL, updated TEXT NOT NULL, message_id TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS meta_reminder_responses (job TEXT PRIMARY KEY, payload TEXT NOT NULL)')
 
     def configured(self):
         return (bool(self.settings.get('WHATSAPP_ACCESS_TOKEN')) and
@@ -88,7 +89,7 @@ class MetaReminder:
         if event.get('contactPhone') != TEST_PHONE or event.get('message', '').strip() != TEST_TRIGGER:
             return 'not eligible'
         template = self.approved_template()
-        job = self.monitor.digest('meta-reminder-owner-test-v2:' + event['contextId'])
+        job = self.monitor.digest('meta-reminder-owner-test-v3:' + event['contextId'])
         with self.monitor.store.connect() as db:
             claimed = db.execute(f'INSERT INTO meta_reminder_attempts VALUES ({self.p},{self.p},{self.p},{self.p}) ON CONFLICT DO NOTHING RETURNING job', (job, 'sending', now.isoformat(), '')).fetchone()
         if not claimed:
@@ -98,6 +99,11 @@ class MetaReminder:
             result = self.transport('POST', EXPECTED_PHONE_ID + '/messages', {
                 'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': TEST_PHONE, 'type': 'template',
                 'template': {'name': TEMPLATE_NAME, 'language': {'code': 'pt_BR'}}})
+            # Persist only diagnostic fields, encrypted, before interpreting success.
+            receipt = {key: result[key] for key in ('contacts', 'messages') if isinstance(result, dict) and key in result}
+            encrypted_receipt = self.monitor.cipher.encrypt(json.dumps(receipt).encode()).decode()
+            with self.monitor.store.connect() as db:
+                db.execute(f'INSERT INTO meta_reminder_responses VALUES ({self.p},{self.p}) ON CONFLICT DO NOTHING', (job, encrypted_receipt))
             messages = result.get('messages', []) if isinstance(result, dict) else []
             if len(messages) == 1 and isinstance(messages[0].get('id'), str) and messages[0]['id'].startswith('wamid.'):
                 state, message_id = 'accepted', messages[0]['id']
@@ -119,10 +125,22 @@ class MetaReminder:
         sender = self.monitor.fiorella
         with self.monitor.store.connect() as db:
             attempts = db.execute('SELECT state, updated, message_id FROM meta_reminder_attempts').fetchall()
+            receipts = db.execute('SELECT payload FROM meta_reminder_responses').fetchall()
         ids = {self.monitor.cipher.decrypt(row[2].encode()).decode() for row in attempts if row[2]}
         result = {'attempts': [{'state': row[0], 'at': row[1]} for row in attempts], 'delivery_confirmed': False}
+        details = []
+        for encrypted, in receipts:
+            receipt = json.loads(self.monitor.cipher.decrypt(encrypted.encode()))
+            contacts = receipt.get('contacts', [])
+            messages = receipt.get('messages', [])
+            details.append({'recipient_matches_sent': any(row.get('wa_id') == TEST_PHONE for row in contacts),
+                'recipient_lengths': [len(row['wa_id']) for row in contacts if isinstance(row.get('wa_id'), str)],
+                'initial_statuses': [row.get('message_status') if row.get('message_status') in ('accepted', 'held_for_quality_assessment', 'paused', 'sent', 'failed') else 'not returned' for row in messages]})
+        result['send_response_details'] = details
         try:
             chat = sender.test_chat()
+            result['canonical_recipient_matches'] = {field: str(chat.get(field, '')).lstrip('+') == TEST_PHONE for field in ('recipient', 'whatsappPhone')}
+            result['canonical_recipient_lengths'] = {field: len(str(chat.get(field, '')).lstrip('+')) for field in ('recipient', 'whatsappPhone')}
             messages = sender.read_list('/chat/' + sender.segment(chat['id']) + '/messages')
             matches = [m for m in messages if m.get('id') in ids or m.get('externalId') in ids]
             result['provider_history_matches'] = len(matches)

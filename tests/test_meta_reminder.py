@@ -112,3 +112,26 @@ class MetaReminderTests(unittest.TestCase):
         sender.read_list.return_value = []
         self.monitor.fiorella = sender
         self.assertFalse(self.meta.delivery_probe()['delivery_confirmed'])
+
+    def test_initial_held_response_is_encrypted_and_not_reported_as_delivery(self):
+        original = self.meta.transport
+        def transport(method, path, body=None):
+            if method == 'POST':
+                return {'contacts': [{'input': TEST_PHONE, 'wa_id': TEST_PHONE}], 'messages': [{'id': 'wamid.held', 'message_status': 'held_for_quality_assessment'}]}
+            return original(method, path, body)
+        self.meta.transport = transport
+        self.meta.send_test(self.event, self.now)
+        sender = Mock()
+        sender.test_chat.return_value = {'id': 'chat-1', 'recipient': TEST_PHONE}
+        sender.segment.return_value = 'chat-1'
+        sender.read_list.return_value = []
+        self.monitor.fiorella = sender
+        result = self.meta.delivery_probe()
+        self.assertEqual(result['send_response_details'][0]['initial_statuses'], ['held_for_quality_assessment'])
+        self.assertTrue(result['send_response_details'][0]['recipient_matches_sent'])
+        self.assertFalse(result['delivery_confirmed'])
+        with self.monitor.store.connect() as db:
+            encrypted = db.execute('SELECT payload FROM meta_reminder_responses').fetchone()[0]
+        self.assertNotIn(TEST_PHONE, encrypted)
+        self.assertNotIn('wamid.held', encrypted)
+        self.assertNotIn(TEST_PHONE, str(result))
