@@ -138,7 +138,7 @@ class Alerts:
                 'Passaram 24 horas corridas desde a saudação da Fiorella.',
                 'Contato com telefone terminado em ' + row['latest'].get('contactPhone', '')[-4:] + '.',
                 'A resposta humana precisa de atenção prioritária.',
-                'A mensagem automática de desculpas ainda não está configurada; fora da janela do WhatsApp é necessário um modelo aprovado.',
+                'Confira no painel a tentativa do lembrete automático de desculpas. O envio não substitui a resposta humana.',
                 'Confira a conversa: https://fazendo-fita-webhook.onrender.com/monitor',
                 'Aviso interno. A saudação automática não encerra a espera.'
             ])
@@ -166,7 +166,7 @@ class Alerts:
         label = 'E-mails: resumos às 12h e às 16h30 (Brasília).' if scheduled else 'E-mails: envio de teste; resumos automáticos ainda desativados.'
         labels = {'accepted': 'aceito pelo servidor de envio; conferir recebimento', 'sending': 'tentativa iniciada; conferir recebimento', 'uncertain': 'falha ou resultado incerto; conferir configuração e recebimento'}
         if getattr(self.crm, 'monitor', None) and scheduled:
-            label += ' WhatsApp: um aviso por espera que atingir 1 hora útil (seg-sex, 8h-18h). Somente acompanhamento; Fiorella ainda desativada.'
+            label += ' WhatsApp: um aviso por espera que atingir 1 hora útil (seg-sex, 8h-18h). Confira no painel de conversas o estado dos envios da Fiorella.'
         label += ' Entregas e cancelamentos aparecem uma vez e depois ficam fora dos resumos.'
         return label, [' | '.join((job, recipient, labels[state])) for job, recipient, state in rows]
 

@@ -79,7 +79,7 @@ class MetaReminder:
             entries = phones.get('data', []) if isinstance(phones, dict) else []
             if not any(row.get('id') == EXPECTED_PHONE_ID for row in entries):
                 raise ProviderError('configured phone not found in this account')
-            return {'ready': True, 'template': template['name'], 'language': template['language'], 'status': template['status'], 'category': template['category'], 'mode': 'owner-only test; customer rollout disabled'}
+            return {'ready': True, 'template': template['name'], 'language': template['language'], 'status': template['status'], 'category': template['category'], 'mode': 'production' if getattr(self.monitor, 'operation', None) and self.monitor.operation.control()[0] else 'owner-only test; customer rollout disabled'}
         except ProviderError as error:
             return {'ready': False, 'status': str(error)}
 
@@ -88,8 +88,15 @@ class MetaReminder:
         # canonical GPT Maker history. Keep recipient and text non-configurable.
         if event.get('contactPhone') != TEST_PHONE or event.get('message', '').strip() != TEST_TRIGGER:
             return 'not eligible'
-        template = self.approved_template()
         job = self.monitor.digest('meta-reminder-owner-test-v3:' + event['contextId'])
+        return self.send_template(TEST_PHONE, job, now)
+
+    def send_template(self, recipient, job, now):
+        # Only called by a verified event or the canonical production dispatcher.
+        import re
+        if not isinstance(recipient, str) or not re.fullmatch(r'\d{11,15}', recipient):
+            raise ProviderError('invalid verified recipient')
+        self.approved_template()
         with self.monitor.store.connect() as db:
             claimed = db.execute(f'INSERT INTO meta_reminder_attempts VALUES ({self.p},{self.p},{self.p},{self.p}) ON CONFLICT DO NOTHING RETURNING job', (job, 'sending', now.isoformat(), '')).fetchone()
         if not claimed:
@@ -97,10 +104,11 @@ class MetaReminder:
         state, message_id = 'uncertain', ''
         try:
             result = self.transport('POST', EXPECTED_PHONE_ID + '/messages', {
-                'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': TEST_PHONE, 'type': 'template',
+                'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': recipient, 'type': 'template',
                 'template': {'name': TEMPLATE_NAME, 'language': {'code': 'pt_BR'}}})
             # Persist only diagnostic fields, encrypted, before interpreting success.
             receipt = {key: result[key] for key in ('contacts', 'messages') if isinstance(result, dict) and key in result}
+            receipt['requested_recipient'] = recipient
             encrypted_receipt = self.monitor.cipher.encrypt(json.dumps(receipt).encode()).decode()
             with self.monitor.store.connect() as db:
                 db.execute(f'INSERT INTO meta_reminder_responses VALUES ({self.p},{self.p}) ON CONFLICT DO NOTHING', (job, encrypted_receipt))
@@ -118,7 +126,7 @@ class MetaReminder:
     def status(self):
         with self.monitor.store.connect() as db:
             states = [r[0] for r in db.execute('SELECT state FROM meta_reminder_attempts').fetchall()]
-        return {'configured': self.configured(), 'mode': 'owner-only test', 'test_trigger': TEST_TRIGGER, 'attempts': states}
+        return {'configured': self.configured(), 'mode': 'production' if getattr(self.monitor, 'operation', None) and self.monitor.operation.control()[0] else 'owner-only test', 'test_trigger': TEST_TRIGGER, 'attempts': states}
 
     def delivery_probe(self):
         """Read-only correlation; no claim of delivery without a delivery webhook."""
@@ -133,7 +141,7 @@ class MetaReminder:
             receipt = json.loads(self.monitor.cipher.decrypt(encrypted.encode()))
             contacts = receipt.get('contacts', [])
             messages = receipt.get('messages', [])
-            details.append({'recipient_matches_sent': any(row.get('wa_id') == TEST_PHONE for row in contacts),
+            details.append({'recipient_matches_sent': any(row.get('wa_id') == receipt.get('requested_recipient', TEST_PHONE) for row in contacts),
                 'recipient_lengths': [len(row['wa_id']) for row in contacts if isinstance(row.get('wa_id'), str)],
                 'initial_statuses': [row.get('message_status') if row.get('message_status') in ('accepted', 'held_for_quality_assessment', 'paused', 'sent', 'failed') else 'not returned' for row in messages]})
         result['send_response_details'] = details

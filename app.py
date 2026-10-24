@@ -1,4 +1,4 @@
-"""WhatsApp ingress. No outbound messages or classification in this stage."""
+"""Verified WhatsApp intake, internal CRM and fixed-message dispatch."""
 from contextlib import contextmanager
 import hashlib
 import hmac
@@ -57,7 +57,9 @@ class Webhook:
             return [body]
 
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
-        if self.monitor and path in ('/monitor', '/monitor/events', '/monitor/fiorella', '/monitor/fiorella/probe', '/monitor/meta', '/monitor/meta/probe', '/monitor/meta/delivery'):
+        if self.monitor and self.monitor.operation and self.monitor.operation.accepts_path(path):
+            return self.monitor.handle(environ, start_response)
+        if self.monitor and path in ('/monitor', '/monitor/events', '/monitor/fiorella', '/monitor/fiorella/probe', '/monitor/meta', '/monitor/meta/probe', '/monitor/meta/delivery', '/monitor/operation', '/monitor/operation/probe', '/monitor/control', '/monitor/operation/connect'):
             return self.monitor.handle(environ, start_response)
         if self.meli and path in ('/meli/connect', '/meli/callback', '/meli/notifications'):
             return self.meli.handle(environ, start_response)
@@ -126,6 +128,9 @@ def create_app():
         app.monitor.fiorella = Fiorella(app.monitor, os.environ.get('GPTMAKER_API_KEY', ''))
         from meta_reminder import MetaReminder
         app.monitor.fiorella.meta = MetaReminder(app.monitor, {k: os.environ.get(k, '') for k in ('WHATSAPP_BUSINESS_ACCOUNT_ID', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_ACCESS_TOKEN')})
+        from operation import Operation
+        app.monitor.operation = Operation(app.monitor)
+        app.monitor.operation.start()
         crm.monitor = app.monitor
         crm.meli = app.meli
     from alerts import configure as configure_alerts

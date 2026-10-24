@@ -1,4 +1,4 @@
-"""Private GPT Maker intake and conversation review; never sends messages."""
+"""Private WhatsApp history, response deadlines and operation controls."""
 import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -34,6 +34,7 @@ def business_deadline(start, minutes=60):
 
 class Monitor:
     def __init__(self, store, settings):
+        self.operation = None
         self.fiorella = None
         self.fiorella_status = 'not attempted'
         self.store = store
@@ -155,7 +156,7 @@ class Monitor:
         parts = ['<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Conversas — Fazendo Fita</title><style>body{font:16px system-ui;max-width:1200px;margin:32px auto;padding:16px;color:#242038}table{width:100%;border-collapse:collapse}td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd;vertical-align:top}td{overflow-wrap:anywhere;white-space:pre-wrap}a{color:#550982}</style><h1>Conversas do WhatsApp</h1><p><a href="/crm">Pedidos e entregas</a> · <a href="/monitor">Atualizar conversas</a></p>']
         parts.append(f'<p>{len(pending)} conversa(s) aguardando resposta, sendo {len(overdue)} com prazo vencido, em {len(rows)} conversa(s) registradas.</p>')
         parts.append(f'<p style="color:#b00020;font-weight:bold">🔴 {len(critical)} alarme(s) crítico(s): 24 horas após a saudação da Fiorella sem resposta humana.</p>')
-        parts.append('<p>Prazo de resposta humana: 1 hora útil, de segunda a sexta, das 8h às 18h (São Paulo). Novas mensagens do cliente não reiniciam o prazo. A saudação cadastrada da Fiorella não encerra a espera.</p><p>Indicador para revisão: uma mensagem de agradecimento também pode aparecer como espera. Respostas são identificadas pelo fluxo validado com o agente inativo, sem identificar qual pessoa respondeu. Somente eventos encaminhados desde a conexão do n8n; sem histórico anterior. Atualize a página para conferir o prazo.</p>')
+        parts.append('<p>Prazo de resposta humana: 1 hora útil, de segunda a sexta, das 8h às 18h (São Paulo). Novas mensagens do cliente não reiniciam o prazo. A saudação cadastrada da Fiorella não encerra a espera.</p><p>Indicador para revisão: uma mensagem de agradecimento também pode aparecer como espera. Respostas são identificadas pelo fluxo validado com o agente inativo, sem identificar qual pessoa respondeu. Somente mensagens registradas pelo monitor. A operação direta recupera eventos recentes do canal; não importa todo o histórico anterior. Atualize a página para conferir o prazo.</p>')
         if not rows:
             parts.append('<p>Aguardando o primeiro encaminhamento do n8n.</p>')
         else:
@@ -168,11 +169,25 @@ class Monitor:
                 if item['critical_at']:
                     waiting += '\nAlarme de 24h: ' + fmt(item['critical_at'])
                 if item['critical']:
-                    status += '\nMensagem de desculpas ainda não configurada.'
+                    status += '\nConferir o registro do lembrete e dar prioridade à resposta humana.'
                 text = row['message'] or f"[Sem texto; {row['mediaCount']} anexo(s)]"
                 parts.append(('<tr style="background:#fff0f1;color:#9d001b">' if item['critical'] else '<tr>') + ''.join('<td>' + escape(v) + '</td>' for v in (row['contactName'] + '\n' + row['contactPhone'], fmt(datetime.fromisoformat(row['date'])), status, waiting, text[:2000])) + '</tr>')
             parts.append('</table><p>Exibindo até 200 conversas, priorizando os prazos vencidos. Anexos não são baixados.</p>')
-        parts.append('<p>Fiorella: teste limitado ao celular do responsável, com a mensagem exata Teste Fiorella. O envio geral aos clientes está desativado. O agente de IA permanece inativo.</p></html>')
+        if self.operation:
+            status = self.operation.status()
+            label = 'Ativa' if status['enabled'] and status['ready'] else 'Ativa; aguardando validação das conexões' if status['enabled'] else 'Envios pausados'
+            parts.append('<h2>Fiorella — ' + label + '</h2><p>Saudação única e um lembrete após 24 horas sem resposta humana. Sem responder dúvidas. O agente de IA do GPT Maker deve permanecer inativo.</p>')
+            if status['last_error']:
+                parts.append('<p style="color:#b00020">Verificação necessária: ' + escape(status['last_error']) + '</p>')
+            kinds = {'greeting': 'Saudações', 'reminder': 'Lembretes'}
+            states = {'accepted': 'aceitos pela API', 'uncertain': 'resultado incerto — conferir chat', 'sending': 'tentativa iniciada'}
+            counts = ', '.join(escape(kinds.get(r['kind'], r['kind']) + ': ' + states.get(r['state'], r['state'])) + ' (' + str(r['count']) + ')' for r in status['attempts'])
+            if counts:
+                parts.append('<p>Registro de envios: ' + counts + '. Aceitação pela API não confirma entrega. Tentativas incertas não são repetidas automaticamente.</p>')
+            parts.append('<p><a href="/monitor/control">Pausar ou retomar os envios</a></p>')
+        else:
+            parts.append('<p>Fiorella em teste; envios gerais desativados.</p>')
+        parts.append('</html>')
         return ''.join(parts)
 
     def handle(self, environ, start_response):
@@ -184,9 +199,60 @@ class Monitor:
             start_response(status, headers)
             return [body]
         expected = 'Basic ' + base64.b64encode(('admin:' + self.password).encode()).decode()
-        if not hmac.compare_digest(environ.get('HTTP_AUTHORIZATION', '').encode(), expected.encode()):
+        direct = bool(self.operation and self.operation.accepts_path(environ.get('PATH_INFO', '')))
+        if not direct and not hmac.compare_digest(environ.get('HTTP_AUTHORIZATION', '').encode(), expected.encode()):
             return respond('401 Unauthorized', 'Acesso privado')
         path, method = environ.get('PATH_INFO'), environ.get('REQUEST_METHOD')
+        if direct:
+            path = '/monitor/events'
+        if (path, method) == ('/monitor/control', 'GET') and self.operation:
+            enabled = self.operation.control()[0]
+            value = 'false' if enabled else 'true'
+            action = 'Pausar envios' if enabled else 'Retomar envios'
+            html = '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Controle da Fiorella</title><h1>Controle da Fiorella</h1><p>Este controle afeta as mensagens automáticas aos clientes. O monitor e os alertas internos continuam funcionando.</p><form method="post" action="/monitor/control"><input type="hidden" name="enabled" value="' + value + '"><input type="hidden" name="csrf" value="' + self.digest('operation-toggle') + '"><button>' + action + '</button></form><p><a href="/monitor">Voltar às conversas</a></p></html>'
+            return respond('200 OK', html, True)
+        if (path, method) == ('/monitor/control', 'POST') and self.operation:
+            try:
+                from urllib.parse import parse_qs
+                length = int(environ.get('CONTENT_LENGTH') or '0')
+                if not 0 < length <= 1024:
+                    raise ValueError()
+                data = parse_qs(environ['wsgi.input'].read(length).decode())
+                if not hmac.compare_digest(data.get('csrf', [''])[0].encode(), self.digest('operation-toggle').encode()) or data.get('enabled') not in (['true'], ['false']):
+                    return respond('403 Forbidden', 'invalid action')
+                self.operation.set_enabled(data['enabled'] == ['true'])
+                return respond('200 OK', '<p>Controle atualizado.</p><a href="/monitor">Voltar às conversas</a>', True)
+            except Exception:
+                return respond('400 Bad Request', 'Não foi possível alterar os envios. Confira o painel.')
+        if path == '/monitor/operation/connect' and method == 'POST' and self.operation:
+            try:
+                length = int(environ.get('CONTENT_LENGTH') or '0')
+                if not 0 < length <= 1024:
+                    raise ValueError()
+                data = json.loads(environ['wsgi.input'].read(length))
+                if not hmac.compare_digest(str(data.get('csrf', '')).encode(), self.digest('operation-toggle').encode()):
+                    return respond('403 Forbidden', 'invalid action')
+                return respond('200 OK', json.dumps(self.operation.connect()))
+            except Exception:
+                return respond('400 Bad Request', 'connection change failed; check private probe')
+        if path in ('/monitor/operation', '/monitor/operation/probe'):
+            if not self.operation:
+                return respond('503 Service Unavailable', 'operation unavailable')
+            if method == 'GET':
+                result = self.operation.preflight() if path.endswith('/probe') else self.operation.status()
+                return respond('200 OK', json.dumps(result))
+            if method == 'POST' and path == '/monitor/operation':
+                try:
+                    length = int(environ.get('CONTENT_LENGTH') or '0')
+                    if not 0 < length <= 1024:
+                        raise ValueError('invalid body')
+                    data = json.loads(environ['wsgi.input'].read(length))
+                    if not isinstance(data.get('enabled'), bool) or not hmac.compare_digest(str(data.get('csrf', '')).encode(), self.digest('operation-toggle').encode()):
+                        return respond('403 Forbidden', 'invalid action')
+                    return respond('200 OK', json.dumps(self.operation.set_enabled(data['enabled'])))
+                except Exception:
+                    return respond('400 Bad Request', 'operation change failed; check probe')
+            return respond('405 Method Not Allowed', 'method not allowed')
         if path in ('/monitor/meta', '/monitor/meta/probe', '/monitor/meta/delivery') and method == 'GET':
             meta = getattr(self.fiorella, 'meta', None)
             result = meta.delivery_probe() if meta and path.endswith('/delivery') else meta.probe() if meta and path.endswith('/probe') else meta.status() if meta else {'configured': False}
@@ -211,12 +277,14 @@ class Monitor:
             if len(raw) != length:
                 raise ValueError('incomplete body')
             payload = json.loads(raw)
+            if self.operation:
+                payload = self.operation.verified_payload(payload)
             self.save(payload)
         except (ValueError, TypeError, OverflowError, UnicodeDecodeError):
             return respond('400 Bad Request', 'invalid event')
         except Exception:
             return respond('503 Service Unavailable', 'storage unavailable')
-        if self.fiorella:
+        if self.fiorella and not (self.operation and self.operation.control()[0]):
             try:
                 self.fiorella_status = self.fiorella.maybe_send(payload)
             except Exception:

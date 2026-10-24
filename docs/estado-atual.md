@@ -1,6 +1,12 @@
 # Estado atual do projeto
 
-Atualizado em 2026-10-01.
+Atualizado em 24/10/2026.
+
+O CRM Bling/Mercado Livre e os resumos internos por e-mail estão publicados. O WhatsApp comercial 3209 está conectado em coexistência pelo GPT Maker, com agente de IA inativo. Recebimento, resposta humana, saudação fixa, preservação do prazo, aviso de uma hora e entrega do modelo Meta foram validados em testes reais. A operação geral está implementada com ativação após preflight no servidor. Consulte [Operação da Fiorella](operacao-fiorella.md) e [registro técnico](monitoramento-whatsapp.md).
+
+## Histórico de 01/10/2026
+
+Os registros abaixo documentam uma etapa anterior; não descrevem as integrações atuais.
 
 ## WhatsApp Business
 
