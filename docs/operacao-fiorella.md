@@ -1,6 +1,6 @@
 # Operação da Fiorella — Fazendo Fita
 
-Versão de 24/10/2026. A ativação ocorre somente após a conferência privada das conexões.
+Operação geral ativada em 24/10/2026 às 9h43, horário de São Paulo, após a conferência das conexões no servidor.
 
 ## Uso diário
 

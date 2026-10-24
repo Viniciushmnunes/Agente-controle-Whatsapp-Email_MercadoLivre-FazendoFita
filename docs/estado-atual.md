@@ -2,7 +2,7 @@
 
 Atualizado em 24/10/2026.
 
-O CRM Bling/Mercado Livre e os resumos internos por e-mail estão publicados. O WhatsApp comercial 3209 está conectado em coexistência pelo GPT Maker, com agente de IA inativo. Recebimento, resposta humana, saudação fixa, preservação do prazo, aviso de uma hora e entrega do modelo Meta foram validados em testes reais. A operação geral está implementada com ativação após preflight no servidor. Consulte [Operação da Fiorella](operacao-fiorella.md) e [registro técnico](monitoramento-whatsapp.md).
+O CRM Bling/Mercado Livre e os resumos internos por e-mail estão publicados. O WhatsApp comercial 3209 está conectado em coexistência pelo GPT Maker, com agente de IA inativo. Recebimento, resposta humana, saudação fixa, preservação do prazo, aviso de uma hora e entrega do modelo Meta foram validados em testes reais. A operação geral está ativa desde 24/10/2026 às 9h43 (São Paulo), após preflight real e verificação da conexão direta. O recebimento do número 3209 não depende mais do n8n. Consulte [Operação da Fiorella](operacao-fiorella.md) e [registro técnico](monitoramento-whatsapp.md).
 
 ## Histórico de 01/10/2026
 
