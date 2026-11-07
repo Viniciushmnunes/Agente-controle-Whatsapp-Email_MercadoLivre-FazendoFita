@@ -67,6 +67,23 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 3)
         self.assertTrue(all('ALARME VERMELHO' in msg[1] for msg in self.sent))
 
+    def test_broadcast_has_no_internal_alert_but_customer_intent_does(self):
+        from monitor import Monitor
+        monitor = Monitor(self.crm.store, self.fixture.settings)
+        self.crm.monitor = monitor
+        start = datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+        event = dict(assistantId=monitor.agent, channel='CLOUD_API', messageId='promo', contextId='c1', role='user', date=start.isoformat(), message='Claro: oferta exclusiva')
+        monitor.save(event, start)
+        monitor.record_greeting('g1', 'c1', start.isoformat())
+        later = datetime(2026, 10, 21, 16, tzinfo=timezone.utc)
+        self.alerts.monitor_alerts(later)
+        self.assertEqual(self.sent, [])
+        monitor.save(dict(event, messageId='customer', contextId='c2', message='Gostaria de comprar fitas'), start)
+        monitor.record_greeting('g2', 'c2', start.isoformat())
+        self.alerts.monitor_alerts(later)
+        self.assertEqual(len(self.sent), 6)
+        self.assertEqual(sum('ALARME VERMELHO' in msg[1] for msg in self.sent), 3)
+
     def test_daily_slots_local_time_and_restart_dedup(self):
         self.alerts.tick(datetime(2026, 10, 11, 14, 59, tzinfo=timezone.utc))
         self.assertEqual(len(self.sent), 0)

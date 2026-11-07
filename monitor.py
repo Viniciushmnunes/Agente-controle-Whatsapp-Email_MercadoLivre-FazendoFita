@@ -5,6 +5,8 @@ import hashlib
 import hmac
 from html import escape
 import json
+import re
+import unicodedata
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
@@ -12,6 +14,32 @@ from cryptography.fernet import Fernet
 
 ZONE = ZoneInfo('America/Sao_Paulo')
 FIORELLA_GREETING = 'Olá! Sou a Fiorella, assistente virtual da Fazendo Fita. Recebemos sua mensagem! Uma pessoa da nossa equipe dará continuidade ao seu atendimento assim que possível. 🌷'
+
+
+CLASSIFICATION_VERSION = '1'
+CATEGORY_LABELS = {
+    'customer': 'Cliente/lead',
+    'supplier': 'Fornecedor/parceiro',
+    'low': 'Automática/institucional/promocional — baixa prioridade',
+    'review': 'Possível cliente — revisar classificação',
+}
+
+
+def classify_incoming(event):
+    """Conservative content rules; names/brands alone never suppress an alert."""
+    text = ''.join(c for c in unicodedata.normalize('NFKD', event.get('message', '').casefold()) if not unicodedata.combining(c))
+    # Attachments and buying/support intent take precedence over broadcast markers.
+    if event.get('mediaCount') or any(event.get(k) for k in ('images', 'documents', 'videos', 'audios')):
+        return 'review', 'Anexo recebido; requer revisão humana'
+    if re.search(r'\b(comprar|orcamento|encomendar|preciso|gostaria|quero|pedido|compra|preco|valor|ajuda|duvida|problema|voces tem|voces vendem)\b', text):
+        return 'customer', 'Possível intenção de compra ou atendimento'
+    if '?' in text:
+        return 'review', 'Pergunta recebida; manter tratamento de possível cliente'
+    if re.search(r'\b(sou (?:seu |sua |um |uma )?(?:fornecedor|fornecedora|parceiro|parceira)|fornecemos|proposta de parceria)\b', text):
+        return 'supplier', 'Apresentação explícita de fornecedor/parceiro'
+    if re.search(r'\b(mensagem automatica|nao responda (?:a )?esta mensagem|comunicado institucional|informe institucional|para (?:cancelar|deixar de) receber|responda sair|oferta exclusiva|promocao exclusiva)\b', text):
+        return 'low', 'Marcador explícito de mensagem automática/institucional/promocional'
+    return 'review', 'Sem evidência suficiente; manter tratamento de possível cliente'
 
 
 def business_deadline(start, minutes=60):
@@ -114,12 +142,20 @@ class Monitor:
         contexts = {}
         for context, key, encrypted, automatic in events:
             event = json.loads(self.cipher.decrypt(encrypted.encode()))
-            row = contexts.setdefault(context, {'key': context, 'pending_since': None, 'pending_key': None, 'last_reply_key': 'start', 'episode_key': None})
+            row = contexts.setdefault(context, {'key': context, 'pending_since': None, 'pending_key': None, 'last_reply_key': 'start', 'episode_key': None, 'category': 'review', 'classification_reason': 'Sem mensagem recebida para classificar'})
             row['latest'] = event
             # Temporary fail-safe: a greeting copied manually is also kept for review.
             # Exact text is not accepted as evidence of a human reply.
             greeting = event['message'].strip() == FIORELLA_GREETING or self.digest(event['message'].strip()) in automatic_texts
             if event['role'] == 'user':
+                category, reason = classify_incoming(event)
+                # Classify only incoming messages in the unanswered episode. A later
+                # broadcast cannot downgrade an existing customer/ambiguous request.
+                rank = {'low': 0, 'supplier': 1, 'customer': 2, 'review': 3}
+                if row['pending_since'] is None or rank[category] > rank[row['category']]:
+                    row['category'], row['classification_reason'] = category, reason
+                if category == 'low':
+                    continue
                 if row['pending_since'] is None:
                     row['pending_since'] = event['date']
                     row['pending_key'] = key
@@ -130,11 +166,12 @@ class Monitor:
                 row['episode_key'] = None
                 row['last_reply_key'] = key
         for row in contexts.values():
+            row['classification_version'] = CLASSIFICATION_VERSION
             row['deadline'] = business_deadline(datetime.fromisoformat(row['pending_since'])) if row['pending_since'] else None
             row['overdue'] = row['deadline'] is not None and now >= row['deadline']
             row['critical_at'] = None
             row['greeting_key'] = None
-            if row['pending_since']:
+            if row['pending_since'] and row['category'] in ('customer', 'review'):
                 # Only an accepted greeting in the still-unanswered episode counts.
                 candidates = [(key, sent) for key, context, sent in greetings if context == row['key'] and sent >= row['pending_since']]
                 if candidates:
@@ -165,6 +202,9 @@ class Monitor:
                 row = item['latest']
                 fmt = lambda date: date.astimezone(ZONE).strftime('%d/%m/%Y %H:%M:%S')
                 status = '🔴 CRÍTICO — 24h após a Fiorella sem resposta humana' if item['critical'] else 'Prazo vencido — revisar atendimento' if item['overdue'] else 'Aguardando resposta — dentro do prazo' if item['pending_since'] else 'Última mensagem de resposta'
+                status = CATEGORY_LABELS[item['category']] + '\n' + item['classification_reason'] + '\n' + status
+                if item['category'] == 'low':
+                    status = CATEGORY_LABELS['low'] + '\n' + item['classification_reason'] + '\nSem alerta de atendimento; histórico preservado'
                 waiting = ('Desde: ' + fmt(datetime.fromisoformat(item['pending_since'])) + '\nLimite: ' + fmt(item['deadline'])) if item['pending_since'] else '—'
                 if item['critical_at']:
                     waiting += '\nAlarme de 24h: ' + fmt(item['critical_at'])

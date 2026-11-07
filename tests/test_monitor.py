@@ -58,6 +58,54 @@ class MonitorTests(unittest.TestCase):
         self.monitor.save(self.event(messageId='reply', role='assistant'), self.now)
         self.assertEqual(self.monitor.latest()[0]['role'], 'user')
 
+    def test_low_priority_keeps_encrypted_history_without_deadlines(self):
+        for index, text in enumerate(('Claro: oferta exclusiva de internet', 'Mensagem automática: não responda esta mensagem', 'Comunicado institucional: novo horário')):
+            self.monitor.save(self.event(messageId=str(index), contextId=str(index), message=text), self.now)
+            self.monitor.record_greeting('g' + str(index), str(index), '2026-10-20T16:00:00Z')
+        restarted = Monitor(self.store, self.settings)
+        rows = restarted.conversations(datetime(2026, 10, 22, tzinfo=timezone.utc))
+        self.assertEqual(len(restarted.latest()), 3)
+        for row in rows:
+            self.assertEqual(row['category'], 'low')
+            self.assertFalse(row['overdue'])
+            self.assertFalse(row['critical'])
+            self.assertIsNone(row['pending_since'])
+            self.assertEqual(row['classification_version'], '1')
+        self.assertIn('histórico preservado', restarted.page())
+
+    def test_supplier_separate_but_ambiguous_customer_keeps_red_alarm(self):
+        cases = [('Sou fornecedor de fitas', 'supplier', False),
+                 ('Claro', 'review', True),
+                 ('Olá', 'review', True),
+                 ('Mensagem automática: pode me retornar?', 'review', True),
+                 ('Oferta exclusiva, gostaria de comprar fitas', 'customer', True),
+                 ('Mensagem automática', 'review', True)]
+        for index, (text, category, critical) in enumerate(cases):
+            self.monitor.save(self.event(messageId=str(index), contextId=str(index), message=text,
+                                         images=['attachment'] if index == len(cases) - 1 else []), self.now)
+            self.monitor.record_greeting('g' + str(index), str(index), '2026-10-20T16:00:00Z')
+        rows = self.monitor.conversations(datetime(2026, 10, 21, 16, tzinfo=timezone.utc))
+        by_context = {row['latest']['contextId']: row for row in rows}
+        for index, (_, category, critical) in enumerate(cases):
+            self.assertEqual(by_context[str(index)]['category'], category)
+            self.assertEqual(by_context[str(index)]['critical'], critical)
+
+    def test_promotion_cannot_erase_customer_and_new_episode_is_reclassified(self):
+        self.monitor.save(self.event(message='Preciso de fitas'), self.now)
+        self.monitor.record_greeting('g', 'c1', '2026-10-20T16:00:00Z')
+        self.monitor.save(self.event(messageId='promo', message='Oferta exclusiva', date='2026-10-20T17:00:00Z'), self.now)
+        row = self.monitor.conversations(datetime(2026, 10, 21, 16, tzinfo=timezone.utc))[0]
+        self.assertTrue(row['critical'])
+        self.assertEqual(row['pending_since'], '2026-10-20T16:00:00.000000+00:00')
+        self.monitor.save(self.event(messageId='reply', role='assistant', date='2026-10-20T17:01:00Z'), self.now)
+        self.monitor.save(self.event(messageId='promo2', message='Oferta exclusiva', date='2026-10-20T17:02:00Z'), self.now)
+        row = self.monitor.conversations(datetime(2026, 10, 21, 16, tzinfo=timezone.utc))[0]
+        self.assertEqual(row['category'], 'low')
+        self.assertFalse(row['critical'])
+        self.monitor.save(self.event(messageId='client2', message='Olá', date='2026-10-20T17:03:00Z'), self.now)
+        self.assertEqual(self.monitor.conversations(self.now)[0]['category'], 'review')
+        self.assertIsNotNone(self.monitor.conversations(self.now)[0]['pending_since'])
+
     def test_validation(self):
         for changes in [dict(assistantId='other'), dict(role='system'), dict(channel='OTHER'), dict(date='bad'), dict(date='2026-10-20T16:00:00'), dict(date='2027-01-01T00:00:00Z'), dict(date=None), dict(messageId=''), dict(contextId=''), dict(message=123)]:
             with self.subTest(changes=changes), self.assertRaises((ValueError, TypeError)):
