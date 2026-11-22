@@ -52,6 +52,7 @@ class CrmBridge:
         status = self.transport(self.url, {
             'Content-Type': 'application/json',
             'Content-Length': str(len(raw)),
+            'User-Agent': 'FazendoFita-CRM-Bridge/1.0',
             'X-CRM-Timestamp': timestamp,
             'X-CRM-Signature': self.signature(raw, timestamp),
         }, raw)

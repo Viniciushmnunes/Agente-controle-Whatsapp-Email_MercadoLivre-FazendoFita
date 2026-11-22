@@ -29,6 +29,7 @@ class CrmBridgeTests(unittest.TestCase):
         url, headers, raw = calls[0]
         self.assertTrue(url.startswith('https://'))
         self.assertEqual(headers['Content-Type'], 'application/json')
+        self.assertEqual(headers['User-Agent'], 'FazendoFita-CRM-Bridge/1.0')
         payload = json.loads(raw)
         self.assertEqual(payload['direction'], 'inbound')
         self.assertFalse(payload['automatic'])
