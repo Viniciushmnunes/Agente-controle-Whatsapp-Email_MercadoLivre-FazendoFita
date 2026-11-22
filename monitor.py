@@ -10,6 +10,7 @@ import unicodedata
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
+from crm_bridge import CrmBridge
 
 
 ZONE = ZoneInfo('America/Sao_Paulo')
@@ -70,6 +71,7 @@ class Monitor:
         self.cipher = Fernet(settings['BLING_ENCRYPTION_KEY'].encode())
         self.identity_key = hashlib.sha256(b'monitor-identity:' + settings['BLING_ENCRYPTION_KEY'].encode()).digest()
         self.agent = settings.get('GPTMAKER_MONITOR_AGENT_ID', '3FAECF6FF631002178746EE6346DCA12')
+        self.bridge = CrmBridge(settings.get('CRM_BRIDGE_URL', ''), settings.get('CRM_BRIDGE_HMAC_SECRET', ''))
         self.placeholder = '%s' if store.database_url else '?'
         with store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS monitor_messages (event_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, occurred_at TEXT NOT NULL, role TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)')
@@ -77,6 +79,8 @@ class Monitor:
             db.execute('CREATE TABLE IF NOT EXISTS monitor_automatic_messages (event_key TEXT PRIMARY KEY)')
             db.execute('CREATE TABLE IF NOT EXISTS monitor_automatic_texts (text_key TEXT PRIMARY KEY)')
             db.execute('CREATE TABLE IF NOT EXISTS monitor_greetings (greeting_key TEXT PRIMARY KEY, context_key TEXT NOT NULL, sent_at TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS crm_bridge_outbox (event_key TEXT PRIMARY KEY, message_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\', last_error TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, delivered_at TEXT)')
+            db.execute('CREATE INDEX IF NOT EXISTS crm_bridge_outbox_due ON crm_bridge_outbox (status, next_attempt_at)')
 
     def digest(self, value):
         return hmac.new(self.identity_key, value.encode(), hashlib.sha256).hexdigest()
@@ -106,10 +110,44 @@ class Monitor:
         fingerprint = self.digest(plain)
         p = self.placeholder
         with self.store.connect() as db:
-            db.execute(f'INSERT INTO monitor_messages (event_key, context_key, occurred_at, role, fingerprint, payload) VALUES ({p},{p},{p},{p},{p},{p}) ON CONFLICT (event_key) DO NOTHING', (event_key, self.digest(self.agent + ':' + event['contextId']), event['date'], event['role'], fingerprint, self.cipher.encrypt(plain.encode()).decode()))
+            inserted = db.execute(f'INSERT INTO monitor_messages (event_key, context_key, occurred_at, role, fingerprint, payload) VALUES ({p},{p},{p},{p},{p},{p}) ON CONFLICT (event_key) DO NOTHING', (event_key, self.digest(self.agent + ':' + event['contextId']), event['date'], event['role'], fingerprint, self.cipher.encrypt(plain.encode()).decode())).rowcount
             stored = db.execute(f'SELECT fingerprint FROM monitor_messages WHERE event_key={p}', (event_key,)).fetchone()[0]
             if not hmac.compare_digest(stored, fingerprint):
                 raise ValueError('conflicting duplicate')
+            if inserted and self.bridge.enabled:
+                db.execute(f'INSERT INTO crm_bridge_outbox (event_key, message_id, payload, next_attempt_at, status, last_error, created_at, updated_at) VALUES ({p},{p},{p},{p},{p},{p},{p},{p}) ON CONFLICT (event_key) DO NOTHING', (event_key, event['messageId'], self.cipher.encrypt(plain.encode()).decode(), now.isoformat(timespec='microseconds'), 'pending', '', now.isoformat(timespec='microseconds'), now.isoformat(timespec='microseconds')))
+        if self.bridge.enabled:
+            self.flush_crm_outbox(now)
+
+    def is_automatic(self, message_id):
+        with self.store.connect() as db:
+            return bool(db.execute(f'SELECT 1 FROM monitor_automatic_messages WHERE event_key={self.placeholder}', (self.digest(self.agent + ':' + message_id),)).fetchone())
+
+    def flush_crm_outbox(self, now=None, limit=20):
+        if not self.bridge.enabled:
+            return {'delivered': 0, 'pending': 0}
+        now = now or datetime.now(timezone.utc)
+        p = self.placeholder
+        with self.store.connect() as db:
+            rows = db.execute(f'SELECT event_key, payload, attempts FROM crm_bridge_outbox WHERE status={p} AND next_attempt_at<={p} ORDER BY next_attempt_at, created_at LIMIT {int(limit)}', ('pending', now.isoformat(timespec='microseconds'))).fetchall()
+        delivered = 0
+        for event_key, encrypted, attempts in rows:
+            try:
+                event = json.loads(self.cipher.decrypt(encrypted.encode()))
+                self.bridge.forward(event, automatic=self.is_automatic(event['messageId']))
+            except Exception:
+                next_attempts = int(attempts) + 1
+                delay = min(3600, 5 * (3 ** min(next_attempts - 1, 6)))
+                next_attempt = now + timedelta(seconds=delay)
+                with self.store.connect() as db:
+                    db.execute(f'UPDATE crm_bridge_outbox SET attempts={p}, next_attempt_at={p}, status={p}, last_error={p}, updated_at={p} WHERE event_key={p} AND status={p}', (next_attempts, next_attempt.isoformat(timespec='microseconds'), 'pending', 'delivery_failed', now.isoformat(timespec='microseconds'), event_key, 'pending'))
+            else:
+                with self.store.connect() as db:
+                    db.execute(f'UPDATE crm_bridge_outbox SET status={p}, delivered_at={p}, updated_at={p}, last_error={p} WHERE event_key={p} AND status={p}', ('delivered', now.isoformat(timespec='microseconds'), now.isoformat(timespec='microseconds'), '', event_key, 'pending'))
+                delivered += 1
+        with self.store.connect() as db:
+            pending = db.execute('SELECT COUNT(*) FROM crm_bridge_outbox WHERE status=\'pending\'').fetchone()[0]
+        return {'delivered': delivered, 'pending': pending}
 
     def latest(self):
         # A late webhook cannot replace a newer reply. Equal timestamps prefer review.

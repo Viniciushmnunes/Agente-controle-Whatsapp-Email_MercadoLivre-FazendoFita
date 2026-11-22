@@ -334,6 +334,7 @@ class Operation:
 
     def tick(self, now=None):
         now = now or datetime.now(timezone.utc)
+        self.monitor.flush_crm_outbox(now)
         enabled, activated = self.control()
         if not enabled:
             return

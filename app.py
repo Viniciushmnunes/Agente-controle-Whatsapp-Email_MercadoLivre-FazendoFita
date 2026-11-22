@@ -123,7 +123,7 @@ def create_app():
     app.meli = configure_meli(crm)
     if crm:
         from monitor import Monitor
-        app.monitor = Monitor(store, dict(crm.settings, **{k: v for k, v in os.environ.items() if k == 'GPTMAKER_MONITOR_AGENT_ID'}))
+        app.monitor = Monitor(store, dict(crm.settings, **{k: v for k, v in os.environ.items() if k in ('GPTMAKER_MONITOR_AGENT_ID', 'CRM_BRIDGE_URL', 'CRM_BRIDGE_HMAC_SECRET')}))
         from fiorella import Fiorella
         app.monitor.fiorella = Fiorella(app.monitor, os.environ.get('GPTMAKER_API_KEY', ''))
         from meta_reminder import MetaReminder
