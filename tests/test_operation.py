@@ -90,6 +90,17 @@ class OperationTests(unittest.TestCase):
         self.assertNotIn(self.phone, encrypted)
         self.assertNotIn(self.context, encrypted)
 
+    def test_verified_payload_prefers_profile_name_and_marks_fiorella_greeting_automatic(self):
+        self.chat['profileName'] = 'Cliente Real'
+        date = self.now
+        self.messages.append(dict(id='automatic-greeting', role='assistant', text=FIORELLA_GREETING, time=int(date.timestamp() * 1000)))
+        event = dict(assistantId=self.monitor.agent, channel='CLOUD_API', messageId='automatic-greeting', contextId=self.context, contactPhone=self.phone, contactName='🥰🥰', role='assistant', message='', date=date.isoformat())
+
+        verified = self.operation.verified_payload(event, date)
+
+        self.assertEqual(verified['contactName'], 'Cliente Real')
+        self.assertTrue(self.monitor.is_automatic('automatic-greeting'))
+
     def test_reminder_once_after_24_hours_without_new_customer_message(self):
         self.event()
         self.operation.tick(self.now)

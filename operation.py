@@ -76,12 +76,21 @@ class Operation:
         if len(matches) != 1:
             raise ProviderError('event not found in canonical history')
         message = matches[0]
-        if message.get('role') == 'assistant' and (message.get('hasError') or message.get('deletedMessage') or message.get('requestApproval')):
+        if message.get('role') == 'assistant' and (self.automatic(message) or message.get('hasError') or message.get('deletedMessage') or message.get('requestApproval')):
             self.monitor.mark_automatic(message['id'])
-        verified = dict(event, message=message.get('text') or '', date=instant(message.get('time')).isoformat(), contactName=chat.get('name') or chat.get('title') or event.get('contactName', ''))
+        verified = dict(event, message=message.get('text') or '', date=instant(message.get('time')).isoformat(), contactName=self.contact_name(chat, event))
         for field, source in (('images', 'imageUrl'), ('audios', 'audioUrl'), ('documents', 'documentUrl'), ('videos', 'videoUrl')):
             verified[field] = [''] if message.get(source) else []
         return verified
+
+    @staticmethod
+    def contact_name(chat, event):
+        for key in ('profileName', 'profile_name', 'contactName', 'contact_name', 'customerName', 'customer_name', 'userName', 'user_name', 'name', 'title'):
+            value = chat.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        value = event.get('contactName', '')
+        return value.strip() if isinstance(value, str) else ''
 
     def control(self):
         with self.monitor.store.connect() as db:
@@ -208,10 +217,10 @@ class Operation:
                 date = instant(message.get('time'))
                 if date < since or date > now + timedelta(seconds=5):
                     continue
-                event = dict(assistantId=self.monitor.agent, channel='CLOUD_API', contextId=context, contactPhone=phone, contactName=chat.get('name') or chat.get('title') or '', messageId=message['id'], role=message['role'], message=message.get('text') or '', date=date.isoformat())
+                event = dict(assistantId=self.monitor.agent, channel='CLOUD_API', contextId=context, contactPhone=phone, contactName=self.contact_name(chat, {}), messageId=message['id'], role=message['role'], message=message.get('text') or '', date=date.isoformat())
                 for field, source in (('images', 'imageUrl'), ('audios', 'audioUrl'), ('documents', 'documentUrl'), ('videos', 'videoUrl')):
                     event[field] = [''] if message.get(source) else []
-                if message.get('role') == 'assistant' and (message.get('hasError') or message.get('deletedMessage') or message.get('requestApproval')):
+                if message.get('role') == 'assistant' and (self.automatic(message) or message.get('hasError') or message.get('deletedMessage') or message.get('requestApproval')):
                     self.monitor.mark_automatic(message['id'])
                 # Provider edits/profile renames must not turn immutable history
                 # duplicates into a failure that blocks all other conversations.
